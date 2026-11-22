@@ -35,8 +35,8 @@ const SPAWN_B = [18, -12];
 
 const WEAPONS = [
   {
-    id: "smg", name: "SMG", damage: 14, interval: 0.05, mag: 30,
-    reload: 1.25, pellets: 1, spread: 0.032, recoil: 0.022,
+    id: "smg", name: "SMG", damage: 11, interval: 0.05, mag: 30,
+    reload: 1.25, pellets: 1, spread: 0.032, recoil: 0.038,
     falloffStart: 12, falloffEnd: 32, minMult: 0.55,
     hint: "Circle sight with a red dot. No zoom. Fast shots, harder kick, 30-round mag",
   },
@@ -2215,7 +2215,7 @@ function fireShot(attacker) {
     up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
     const kick = weapon.recoil * (1 - 0.55 * ads);
     player.pitch = clamp(player.pitch + kick, -1.15, 1.15);
-    if (weapon.id === "smg") player.yaw += (Math.random() * 2 - 1) * 0.016 * (1 - 0.55 * ads);
+    if (weapon.id === "smg") player.yaw += (Math.random() * 2 - 1) * 0.028 * (1 - 0.55 * ads);
   } else {
     origin = new THREE.Vector3(bot.x, aimHeight(bot), bot.z);
     direction = new THREE.Vector3(player.x, chestHeight(player), player.z).sub(origin);
@@ -3043,8 +3043,8 @@ function runSelfTest() {
   const shotgun = WEAPONS[2];
   const sniper = WEAPONS[3];
   check(smg.interval < ar.interval && smg.interval === 0.05, "SMG is not faster than the AR");
-  check(smg.damage < ar.damage && smg.damage === 14 && ar.damage === 21, "SMG damage is not lower than the AR");
-  check(smg.recoil > ar.recoil, "SMG recoil is not harder to control");
+  check(smg.damage < ar.damage && smg.damage === 11 && ar.damage === 21, "SMG damage is not lower than the AR");
+  check(smg.recoil === 0.038 && smg.recoil > ar.recoil, "SMG recoil is not harder to control");
   check(DIFFICULTY.easy.speed < DIFFICULTY.medium.speed
     && DIFFICULTY.medium.speed < DIFFICULTY.hard.speed
     && DIFFICULTY.hard.speed < DIFFICULTY.hacker.speed, "bot difficulties are not ordered");
