@@ -42,7 +42,7 @@ const WEAPONS = [
     hint: "Circle sight with a red dot. No zoom. Fast shots, harder kick, 30-round mag",
   },
   {
-    id: "ar", name: "AR", damage: 34, interval: 0.16, mag: 30,
+    id: "ar", name: "AR", damage: 30, interval: 0.16, mag: 30,
     reload: 1.5, pellets: 1, spread: 0, recoil: 0.008,
     falloffStart: 20, falloffEnd: 45, minMult: 0.72,
     hint: "Circle sight with a red dot. 1.5x zoom. Slower, higher damage, 30-round mag",
@@ -73,6 +73,9 @@ const HOLE_RADIUS = { smg: 0.045, ar: 0.045, pistol: 0.04, sniper: 0.11, shotgun
 const SHOTGUN_FAR_HOLE = 0.042;
 const HEAD_RADIUS = 0.28;
 const HEAD_MULT = 2;
+function headMult(weapon) {
+  return weapon.id === "smg" || weapon.id === "ar" ? 1.5 : HEAD_MULT;
+}
 const MAX_HOLES = 16;
 const BLOOM = {
   smg: { perShot: 0.012, max: 0.13, recover: 0.24 },
@@ -2244,7 +2247,7 @@ function fireShot(attacker) {
     const end = origin.clone().addScaledVector(shot, hit ? hit.t : 40);
     addTracer(origin, end, weapon.id === "shotgun" ? 0xf0c14a : 0xffe7a3);
     if (!hit) continue;
-    const amount = weapon.damage * falloff(weapon, hit.t) * (hit.head ? HEAD_MULT : 1);
+    const amount = weapon.damage * falloff(weapon, hit.t) * (hit.head ? headMult(weapon) : 1);
     if (hit.actor) {
       hitActor = hit.actor;
       actorDamage += amount;
@@ -3043,7 +3046,8 @@ function runSelfTest() {
   const shotgun = WEAPONS[2];
   const sniper = WEAPONS[3];
   check(smg.interval < ar.interval && smg.interval === 0.05, "SMG is not faster than the AR");
-  check(smg.damage < ar.damage && smg.damage === 11 && ar.damage === 34, "SMG damage is not lower than the AR");
+  check(smg.damage < ar.damage && smg.damage === 11 && ar.damage === 30, "SMG damage is not lower than the AR");
+  check(headMult(smg) === 1.5 && headMult(ar) === 1.5 && headMult(sniper) === HEAD_MULT, "SMG and AR headshots are not 1.5x");
   check(smg.recoil === 0.038 && smg.recoil > ar.recoil, "SMG recoil is not harder to control");
   check(DIFFICULTY.easy.speed < DIFFICULTY.medium.speed
     && DIFFICULTY.medium.speed < DIFFICULTY.hard.speed
@@ -3357,7 +3361,7 @@ function runSelfTest() {
   player.reload = 0;
   player.pitch = Math.atan2(headCenterY(bot) - EYE, 3);
   fireShot(player);
-  check(bot.alive && Math.abs(bot.health - (100 - ar.damage * HEAD_MULT)) < 0.6, `headshot did ${100 - bot.health} instead of ${ar.damage * HEAD_MULT}`);
+  check(bot.alive && Math.abs(bot.health - (100 - ar.damage * headMult(ar))) < 0.6, `headshot did ${100 - bot.health} instead of ${ar.damage * headMult(ar)}`);
   check(headMark && headMark.classList.contains("head") && !headMark.classList.contains("kill"), "headshot marker did not turn gold");
   player.pitch = 0;
 
