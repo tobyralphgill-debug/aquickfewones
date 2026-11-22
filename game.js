@@ -15,6 +15,7 @@ const LEAN_YAW = 0.26;
 const LEAN_ROLL = 0.08;
 const FOOT_GAIN = { sprint: 0.9, walk: 0.42, crouch: 0.11 };
 const WIN_SCORE = 5;
+const MAX_HEALTH = 200;
 const WALL_HP = 100;
 const SPAWN_LOCK = 1.5;
 const ROUND_WAIT = 3;
@@ -199,7 +200,7 @@ function makeActor(spawnX, spawnZ) {
     spawnZ,
     yaw: 0,
     pitch: 0,
-    health: 100,
+    health: MAX_HEALTH,
     kills: 0,
     alive: true,
     spawnLock: SPAWN_LOCK,
@@ -1178,7 +1179,7 @@ function newBotRoute() {
 function respawn(actor) {
   actor.x = actor.spawnX;
   actor.z = actor.spawnZ;
-  actor.health = 100;
+  actor.health = MAX_HEALTH;
   actor.alive = true;
   actor.spawnLock = SPAWN_LOCK;
   actor.respawnIn = 0;
@@ -2757,7 +2758,7 @@ function paintHud() {
   top.textContent = `You ${player.kills}  —  ${foe} ${bot.kills} (${botGun})  —  first to ${WIN_SCORE}`;
   const hp = Math.max(0, Math.ceil(player.health));
   health.textContent = player.alive ? `Health ${hp}` : "Health 0";
-  fill.style.width = `${hp}%`;
+  fill.style.width = `${(hp / MAX_HEALTH) * 100}%`;
   name.textContent = weapon.name;
   if (player.reload > 0) ammo.textContent = "Reloading";
   else ammo.textContent = `${player.ammo[weapon.id]} / ${weapon.mag}`;
@@ -3282,6 +3283,7 @@ function runSelfTest() {
 
   respawn(bot);
   respawn(player);
+  check(player.health === MAX_HEALTH && bot.health === MAX_HEALTH, "respawn did not fill health");
   player.kills = 0;
   bot.kills = 0;
   matchOver = false;
