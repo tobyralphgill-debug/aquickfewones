@@ -42,8 +42,8 @@ const WEAPONS = [
     hint: "Circle sight with a red dot. No zoom. Fast shots, harder kick, 30-round mag",
   },
   {
-    id: "ar", name: "AR", damage: 21, interval: 0.16, mag: 30,
-    reload: 1.5, pellets: 1, spread: 0.007, recoil: 0.008,
+    id: "ar", name: "AR", damage: 34, interval: 0.16, mag: 30,
+    reload: 1.5, pellets: 1, spread: 0, recoil: 0.008,
     falloffStart: 20, falloffEnd: 45, minMult: 0.72,
     hint: "Circle sight with a red dot. 1.5x zoom. Slower, higher damage, 30-round mag",
   },
@@ -76,9 +76,8 @@ const HEAD_MULT = 2;
 const MAX_HOLES = 16;
 const BLOOM = {
   smg: { perShot: 0.012, max: 0.13, recover: 0.24 },
-  ar: { perShot: 0.007, max: 0.042, recover: 0.18 },
 };
-const MOVE_SPREAD = { smg: 0.036, ar: 0.011 };
+const MOVE_SPREAD = { smg: 0.036 };
 const BODY_PARTS = [
   { y: 0.62, rx: 0.432, ry: 0.568, rz: 0.384, head: false },
   { y: 1.4, rx: 0.315, ry: 0.276, rz: 0.288, head: true },
@@ -2287,7 +2286,7 @@ function fireShot(attacker) {
 function playerShotSpread(weapon) {
   const adsScale = 1 - 0.8 * ads;
   let spread = weapon.spread * adsScale;
-  if (weapon.id === "smg" || weapon.id === "ar") {
+  if (weapon.id === "smg") {
     const speed = Math.hypot(player.vx, player.vz);
     const move = (MOVE_SPREAD[weapon.id] || 0) * Math.min(1, speed / SPRINT_SPEED);
     spread += (hipBloom + move) * (1 - ads);
@@ -3044,7 +3043,7 @@ function runSelfTest() {
   const shotgun = WEAPONS[2];
   const sniper = WEAPONS[3];
   check(smg.interval < ar.interval && smg.interval === 0.05, "SMG is not faster than the AR");
-  check(smg.damage < ar.damage && smg.damage === 11 && ar.damage === 21, "SMG damage is not lower than the AR");
+  check(smg.damage < ar.damage && smg.damage === 11 && ar.damage === 34, "SMG damage is not lower than the AR");
   check(smg.recoil === 0.038 && smg.recoil > ar.recoil, "SMG recoil is not harder to control");
   check(DIFFICULTY.easy.speed < DIFFICULTY.medium.speed
     && DIFFICULTY.medium.speed < DIFFICULTY.hard.speed
@@ -3054,20 +3053,20 @@ function runSelfTest() {
   check(HOLE_RADIUS.smg === HOLE_RADIUS.ar && HOLE_RADIUS.ar < HOLE_RADIUS.sniper
     && HOLE_RADIUS.sniper < HOLE_RADIUS.shotgun, "bullet holes are not sized by gun");
   check(smg.mag === 30 && ar.mag === 30, "SMG or AR mag is not 30");
-  check(smg.spread === 0.052 && ar.spread === 0.007, "rifle spread changed");
+  check(smg.spread === 0.052 && ar.spread === 0, "rifle spread changed");
   player.weapon = 1;
   player.vx = 0;
   player.vz = 0;
   ads = 0;
   hipBloom = 0;
-  check(Math.abs(playerShotSpread(ar) - ar.spread) < 1e-6, "standing AR hip spread changed");
+  check(playerShotSpread(ar) === 0, "standing AR hipfire has spread");
   player.vx = SPRINT_SPEED;
-  check(playerShotSpread(ar) > ar.spread + 0.008, "moving did not open the AR");
+  check(playerShotSpread(ar) === 0, "moving opened the AR");
   player.vx = 0;
   hipBloom = 0.02;
-  check(playerShotSpread(ar) > ar.spread + 0.015, "firing did not open the AR");
+  check(playerShotSpread(ar) === 0, "firing opened the AR");
   ads = 1;
-  check(playerShotSpread(ar) < 0.004, "ADS kept the hip spread");
+  check(playerShotSpread(ar) === 0, "ADS added AR spread");
   ads = 0;
   hipBloom = 0;
   player.weapon = 0;
