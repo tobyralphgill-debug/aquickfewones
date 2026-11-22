@@ -38,12 +38,12 @@ const WEAPONS = [
   {
     id: "smg", name: "SMG", damage: 11, interval: 0.05, mag: 30,
     reload: 1.25, pellets: 1, spread: 0.052, recoil: 0.038,
-    falloffStart: 12, falloffEnd: 32, minMult: 0.55,
+    falloffStart: 8, falloffEnd: 28, minMult: 0.8,
     hint: "Circle sight with a red dot. No zoom. Fast shots, harder kick, 30-round mag",
   },
   {
     id: "ar", name: "AR", damage: 30, interval: 0.16, mag: 30,
-    reload: 1.5, pellets: 1, spread: 0, recoil: 0.008,
+    reload: 1.5, pellets: 1, spread: 0, recoil: 0.022,
     falloffStart: 20, falloffEnd: 45, minMult: 0.72,
     hint: "Circle sight with a red dot. 1.5x zoom. Slower, higher damage, 30-round mag",
   },
@@ -3048,7 +3048,8 @@ function runSelfTest() {
   check(smg.interval < ar.interval && smg.interval === 0.05, "SMG is not faster than the AR");
   check(smg.damage < ar.damage && smg.damage === 11 && ar.damage === 30, "SMG damage is not lower than the AR");
   check(headMult(smg) === 1.5 && headMult(ar) === 1.5 && headMult(sniper) === HEAD_MULT, "SMG and AR headshots are not 1.5x");
-  check(smg.recoil === 0.038 && smg.recoil > ar.recoil, "SMG recoil is not harder to control");
+  check(smg.recoil === 0.038 && ar.recoil === 0.022 && smg.recoil > ar.recoil, "SMG recoil is not harder to control");
+  check(falloff(smg, 8) === 1 && Math.abs(falloff(smg, 18) - 0.9) < 1e-6 && falloff(smg, 40) === 0.8, "SMG dropoff is not small");
   check(DIFFICULTY.easy.speed < DIFFICULTY.medium.speed
     && DIFFICULTY.medium.speed < DIFFICULTY.hard.speed
     && DIFFICULTY.hard.speed < DIFFICULTY.hacker.speed, "bot difficulties are not ordered");
