@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aQuickFewOnes.com</title>
+<meta name="description" content="aQuickFewOnes.com is a browser 1v1. Pick a gun, shoot holes in the house, and race to five.">
+<meta name="theme-color" content="#12161b">
+<meta property="og:title" content="aQuickFewOnes.com">
+<meta property="og:description" content="A quick few ones. First to five in a house you can shoot through.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="site.webmanifest">
+<style>
+  html { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { margin: 0; height: 100%; background: #14181d; overflow: hidden; font-family: "Segoe UI", sans-serif; color: #f2f4f6; }
+  canvas { display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 4; }
+  #cross {
+    position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+  }
+  #cross .tick { position: absolute; left: 0; top: 0; background: #f0c14a; width: 2px; height: 8px; }
+  #cross .left, #cross .right { width: 8px; height: 2px; }
+  #cross .ring {
+    display: none; position: absolute; left: 0; top: 0;
+    border: 2px solid #f0c14a; border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  }
+  #cross .dot {
+    display: none; position: absolute; width: 4px; height: 4px;
+    margin: -2px 0 0 -2px; background: #f0c14a; border-radius: 50%;
+  }
+  #cross.shotgun .tick { display: none; }
+  #cross.shotgun .ring, #cross.shotgun .dot { display: block; }
+  #hit {
+    position: absolute; left: 50%; top: 50%; width: 36px; height: 36px;
+    transform: translate(-50%, -50%); opacity: 0;
+  }
+  #hit i {
+    position: absolute; width: 9px; height: 2px; background: #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  }
+  #hit i:nth-child(1) { left: 1px; top: 8px; transform: rotate(45deg); }
+  #hit i:nth-child(2) { right: 1px; top: 8px; transform: rotate(-45deg); }
+  #hit i:nth-child(3) { left: 1px; bottom: 8px; transform: rotate(-45deg); }
+  #hit i:nth-child(4) { right: 1px; bottom: 8px; transform: rotate(45deg); }
+  #hit.show { opacity: 1; }
+  #hit.head i { background: #f0c14a; }
+  #hit.kill i { background: #ff4d4d; }
+  #brand {
+    position: absolute; top: 18px; left: 22px;
+    font-size: 13px; letter-spacing: 0.01em; opacity: 0.78;
+  }
+  #brand span { color: #f0c14a; }
+  #top {
+    position: absolute; top: 16px; left: 0; right: 0; text-align: center;
+    font-size: 18px; letter-spacing: 0.08em;
+  }
+  #bottom {
+    position: absolute; left: 24px; right: 24px; bottom: 20px;
+    display: flex; justify-content: space-between; align-items: flex-end;
+  }
+  #health-wrap { width: 220px; }
+  #health-label, #ammo { font-size: 14px; margin-bottom: 6px; }
+  #bar { height: 10px; background: #2a3138; }
+  #bar > div { height: 100%; width: 100%; background: #d04545; }
+  #weapon { font-size: 28px; font-weight: 700; }
+  #hint { opacity: 0.75; font-size: 13px; margin-top: 4px; }
+  #banner {
+    position: absolute; top: 38%; left: 0; right: 0; text-align: center;
+    font-size: 42px; font-weight: 700; text-shadow: 0 2px 0 #000;
+  }
+  #lock {
+    position: absolute; left: 50%; bottom: 108px; transform: translateX(-50%);
+    background: rgba(12, 14, 16, 0.88); padding: 12px 18px; pointer-events: none;
+    font-size: 15px;
+  }
+  #dmg {
+    position: absolute; inset: 0; background: rgba(180, 20, 20, 0.35);
+    opacity: 0;
+  }
+  #result {
+    position: absolute; left: 12px; top: 12px; white-space: pre-wrap;
+    font: 14px/1.4 Consolas, monospace; color: #d6f5c8; z-index: 6;
+  }
+  #menu, #pause {
+    position: fixed; inset: 0; z-index: 4;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(10, 12, 14, 0.72);
+  }
+  #menu {
+    display: block;
+    overflow: auto;
+    align-items: stretch;
+    justify-content: flex-start;
+    background:
+      radial-gradient(880px 380px at 8% -8%, rgba(240, 193, 74, 0.16), transparent 62%),
+      #12161b;
+  }
+  #pause { z-index: 5; }
+  #pause[hidden] { display: none; }
+  .site-bar {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 16px 28px;
+    background: rgba(18, 22, 27, 0.94);
+    border-bottom: 1px solid #2c343d;
+  }
+  .wordmark { color: #f2f4f6; text-decoration: none; font-weight: 700; font-size: 18px; letter-spacing: -0.03em; }
+  .wordmark span, .site-foot span { color: #f0c14a; }
+  .site-nav { display: flex; gap: 18px; }
+  .site-nav a { color: #d5dde6; text-decoration: none; font-size: 14px; }
+  .site-nav a:hover { color: #f0c14a; }
+  .site-wrap { width: min(1040px, calc(100% - 48px)); margin: 0 auto; padding: 42px 0 18px; }
+  .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 36px; align-items: start; }
+  .eyebrow { margin: 8px 0 12px; color: #f0c14a; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; }
+  #menu .hero h1 {
+    margin: 0 0 14px;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(46px, 6vw, 72px);
+    font-weight: 500;
+    line-height: 0.94;
+    letter-spacing: -0.03em;
+  }
+  #menu .lede { margin: 0; max-width: 38ch; color: #c5ced6; font-size: 18px; line-height: 1.45; }
+  .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 42px 0 8px; }
+  .fact { background: #1b2128; border: 1px solid #3c4652; padding: 16px; }
+  .fact b { display: block; margin-bottom: 6px; }
+  .fact span { display: block; color: #b7c0ca; font-size: 14px; line-height: 1.45; }
+  .site-foot {
+    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    margin-top: 28px; padding: 18px 28px 26px;
+    border-top: 1px solid #2c343d; color: #8e99a4; font-size: 13px;
+  }
+  #menu .card, #pause .card {
+    width: min(440px, 100%);
+    background: #1b2128; border: 1px solid #3c4652;
+    padding: 22px 22px 18px;
+  }
+  #pause .card {
+    width: min(440px, calc(100% - 32px));
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+  }
+  #menu .card-kicker, #pause .card-kicker { margin: 0 0 4px; color: #f0c14a; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; }
+  #menu .card h2, #pause h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.02em; }
+  #menu .card p, #pause p { margin: 0 0 16px; color: #b7c0ca; line-height: 1.4; }
+  @media (max-width: 800px) {
+    .site-bar, .site-foot { padding-left: 16px; padding-right: 16px; }
+    .site-wrap { width: min(1040px, calc(100% - 32px)); padding-top: 28px; }
+    .hero, .facts { grid-template-columns: 1fr; }
+    .site-bar { align-items: flex-start; flex-wrap: wrap; }
+    .site-nav { gap: 14px; width: 100%; }
+    #brand { display: none; }
+  }
+  #menu button, #menu input, #pause button {
+    font: inherit; display: block; width: 100%;
+    margin-top: 10px; padding: 12px 14px; border: 0;
+  }
+  #menu button, #pause button { background: #f0c14a; color: #1a1408; font-weight: 700; cursor: pointer; }
+  #menu button.ghost, #pause button.ghost { background: #2a333c; color: #f2f4f6; }
+  #menu input { background: #101418; color: #f2f4f6; border: 1px solid #3c4652; }
+  #diff-label, #gun-label { color: #b7c0ca; font-size: 13px; margin: 2px 0 8px; }
+  #gun-label { margin-top: 14px; }
+  #gun-note { color: #b7c0ca; font-size: 13px; margin: 8px 0 0; }
+  #gun-note .gun-hover { color: #f2f4f6; text-decoration: underline dotted; cursor: help; }
+  #gun-tip {
+    position: fixed; z-index: 8; width: 188px;
+    background: #101418; border: 1px solid #3c4652;
+    padding: 8px 10px; color: #f2f4f6; font-size: 13px;
+    pointer-events: none; transform: translateX(-50%);
+  }
+  #gun-tip[hidden] { display: none; }
+  #gun-tip b { display: block; margin-bottom: 4px; font-size: 14px; }
+  #gun-tip span { display: block; color: #d5dde6; line-height: 1.45; }
+  #diffs, #guns { display: flex; gap: 8px; }
+  #menu #diffs button, #menu #guns button {
+    flex: 1 1 0; width: auto; min-width: 0; margin-top: 0; padding: 10px 4px;
+    background: #2a333c; color: #f2f4f6;
+  }
+  #menu #gun-note { margin: 12px 0 0; }
+  #menu #diffs button.on, #menu #guns button.on { background: #f0c14a; color: #1a1408; }
+  #controls { max-height: 62vh; overflow: auto; }
+  .bind-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
+  #menu .bind-row span { color: #d5dde6; font-size: 14px; }
+  #menu .bind-row button { width: 112px; margin: 0; padding: 8px 10px; }
+  #sens-read { display: block; color: #b7c0ca; font-size: 13px; margin-top: 14px; }
+  #menu #sens { margin-top: 8px; }
+  #code { font-size: 40px; letter-spacing: 0.28em; font-weight: 700; margin-top: 8px; }
+  #link, #join-error, #wait { color: #b7c0ca; margin-top: 8px; word-break: break-all; }
+  #scope {
+    display: none; position: fixed; inset: 0; pointer-events: none; z-index: 3;
+    background: radial-gradient(circle at center, transparent 0 18%, rgba(0,0,0,0.55) 22%, #050607 38%);
+  }
+  #scope.on { display: block; }
+  @media (max-width: 800px) {
+    #diffs, #guns { display: grid; grid-template-columns: 1fr 1fr; }
+  }
+  #scope.on::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 168px;
+    height: 168px;
+    transform: translate(-50%, -50%);
+    border: 2px solid rgba(236, 242, 238, 0.92);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+  }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="cross">
+    <i class="tick up"></i><i class="tick down"></i><i class="tick left"></i><i class="tick right"></i>
+    <i class="ring"></i><i class="dot"></i>
+  </div>
+  <div id="hit"><i></i><i></i><i></i><i></i></div>
+  <div id="dmg"></div>
+  <div id="brand">aQuickFewOnes<span>.com</span></div>
+  <div id="top">You 0  —  Opponent 0</div>
+  <div id="banner"></div>
+  <div id="lock">Click to play. WASD move, Shift sprint, Ctrl crouch, Q and F lean. Mouse aim, right mouse aims. 1 primary, 2 pistol. R reload. Hold E to repair. Escape opens the menu.</div>
+  <div id="bottom">
+    <div id="health-wrap">
+      <div id="health-label">Health 100</div>
+      <div id="bar"><div id="fill"></div></div>
+    </div>
+    <div>
+      <div id="weapon">SMG</div>
+      <div id="ammo">30 / 30</div>
+      <div id="hint"></div>
+    </div>
+  </div>
+</div>
+<div id="scope"></div>
+<div id="menu">
+  <header class="site-bar">
+    <a class="wordmark" href="#top-of-site">aQuickFewOnes<span>.com</span></a>
+    <nav class="site-nav">
+      <a href="#play" data-jump="play">Play</a>
+      <a href="#about" data-jump="about">About</a>
+      <a href="#play" data-jump="play">Guns</a>
+    </nav>
+  </header>
+  <main class="site-wrap" id="top-of-site">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Browser 1v1</p>
+        <h1>A quick few ones.</h1>
+        <p class="lede">Pick a gun, shoot the house open, and race to five. The bot is ready. A friend on the same Wi-Fi can join with a code.</p>
+      </div>
+      <div class="card" id="play">
+    <p class="card-kicker">Play</p>
+    <h2>Jump in</h2>
+    <div id="menu-home">
+      <div id="diff-label">Bot difficulty</div>
+      <div id="diffs">
+        <button type="button" data-diff="easy">Easy</button>
+        <button type="button" data-diff="medium" class="on">Medium</button>
+        <button type="button" data-diff="hard">Hard</button>
+        <button type="button" data-diff="hacker">Hacker</button>
+      </div>
+      <div id="gun-label">Primary weapon</div>
+      <div id="guns">
+        <button type="button" data-gun="smg">SMG</button>
+        <button type="button" data-gun="ar" class="on">AR</button>
+        <button type="button" data-gun="shotgun">Shotgun</button>
+        <button type="button" data-gun="sniper">Sniper</button>
+      </div>
+      <p id="gun-note"><span class="gun-hover" data-gun="pistol">Pistol</span> is your secondary. Pick the primary before the round. It stays locked while you fight. 1 and 2 swap in the round.</p>
+      <button id="play-bot" type="button">Play vs computer</button>
+      <button id="host-room" class="ghost" type="button">Invite a friend</button>
+      <button id="show-join" class="ghost" type="button">Join with a code</button>
+      <button id="show-controls" class="ghost" type="button">Controls</button>
+    </div>
+    <div id="controls" hidden>
+      <p>Click a key, then press the new one. Escape cancels. Sprint is louder than walking, and walking is louder than crouch.</p>
+      <div id="bind-list"></div>
+      <span id="sens-read">Mouse sensitivity 1.00</span>
+      <input id="sens" type="range" min="0.4" max="2.2" step="0.05" value="1">
+      <button id="controls-back" class="ghost" type="button">Back</button>
+    </div>
+    <div id="lobby" hidden>
+      <div id="code"></div>
+      <div id="link"></div>
+      <button id="copy" type="button">Copy invite link</button>
+      <div id="wait">Waiting for your friend on the same Wi-Fi. Windows may ask to allow Python.</div>
+      <button id="lobby-back" class="ghost" type="button">Back</button>
+    </div>
+    <div id="join-box" hidden>
+      <input id="code-input" maxlength="4" placeholder="Room code" autocomplete="off">
+      <button id="join-btn" type="button">Join</button>
+      <div id="join-error"></div>
+      <button id="join-back" class="ghost" type="button">Back</button>
+    </div>
+      </div>
+    </section>
+    <section class="facts" id="about">
+      <article class="fact">
+        <b>Shoot the plaster</b>
+        <span>Interior walls break into holes. The outer box of the house stays up.</span>
+      </article>
+      <article class="fact">
+        <b>Fit through the hole</b>
+        <span>You pass where your head, belly, and feet actually fit. A single pellet is not a door.</span>
+      </article>
+      <article class="fact">
+        <b>First to five</b>
+        <span>Repair with E, lean a corner, and bring the pistol when the primary runs dry.</span>
+      </article>
+    </section>
+  </main>
+  <footer class="site-foot">
+    <span>aQuickFewOnes.com</span>
+    <span>Play in the browser. No install.</span>
+  </footer>
+</div>
+<div id="pause" hidden>
+  <div class="card">
+    <p class="card-kicker">aQuickFewOnes.com</p>
+    <h1 id="pause-title">Paused</h1>
+    <p id="pause-note">The bot is waiting.</p>
+    <button id="resume" type="button">Resume</button>
+    <button id="leave-menu" class="ghost" type="button">Main menu</button>
+  </div>
+</div>
+<div id="gun-tip" hidden></div>
+<div id="result"></div>
+<script>
+document.querySelectorAll("[data-jump]").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    const target = document.getElementById(link.dataset.jump);
+    const scroller = document.getElementById("menu");
+    if (!target || !scroller) return;
+    event.preventDefault();
+    scroller.scrollTo({ top: Math.max(0, target.offsetTop - 72), behavior: "smooth" });
+  });
+});
+</script>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+<script type="module" src="./game.js"></script>
+</body>
+</html>
