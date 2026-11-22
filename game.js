@@ -37,7 +37,7 @@ const SPAWN_B = [18, -12];
 const WEAPONS = [
   {
     id: "smg", name: "SMG", damage: 11, interval: 0.05, mag: 30,
-    reload: 1.25, pellets: 1, spread: 0.032, recoil: 0.038,
+    reload: 1.25, pellets: 1, spread: 0.052, recoil: 0.038,
     falloffStart: 12, falloffEnd: 32, minMult: 0.55,
     hint: "Circle sight with a red dot. No zoom. Fast shots, harder kick, 30-round mag",
   },
@@ -75,10 +75,10 @@ const HEAD_RADIUS = 0.28;
 const HEAD_MULT = 2;
 const MAX_HOLES = 16;
 const BLOOM = {
-  smg: { perShot: 0.007, max: 0.08, recover: 0.24 },
+  smg: { perShot: 0.012, max: 0.13, recover: 0.24 },
   ar: { perShot: 0.007, max: 0.042, recover: 0.18 },
 };
-const MOVE_SPREAD = { smg: 0.022, ar: 0.011 };
+const MOVE_SPREAD = { smg: 0.036, ar: 0.011 };
 const BODY_PARTS = [
   { y: 0.62, rx: 0.432, ry: 0.568, rz: 0.384, head: false },
   { y: 1.4, rx: 0.315, ry: 0.276, rz: 0.288, head: true },
@@ -3054,7 +3054,7 @@ function runSelfTest() {
   check(HOLE_RADIUS.smg === HOLE_RADIUS.ar && HOLE_RADIUS.ar < HOLE_RADIUS.sniper
     && HOLE_RADIUS.sniper < HOLE_RADIUS.shotgun, "bullet holes are not sized by gun");
   check(smg.mag === 30 && ar.mag === 30, "SMG or AR mag is not 30");
-  check(smg.spread === 0.032 && ar.spread === 0.007, "rifle spread changed");
+  check(smg.spread === 0.052 && ar.spread === 0.007, "rifle spread changed");
   player.weapon = 1;
   player.vx = 0;
   player.vz = 0;
