@@ -46,9 +46,9 @@ const WEAPONS = [
   },
   {
     id: "ar", name: "AR", damage: 30, interval: 0.16, mag: 30,
-    reload: 1.5, pellets: 1, spread: 0, recoil: 0.022,
+    reload: 1.5, pellets: 1, spread: 0.03, recoil: 0.022,
     falloffStart: 20, falloffEnd: 45, minMult: 0.72,
-    hint: "Circle sight with a red dot. 1.5x zoom. Slower, higher damage, 30-round mag",
+    hint: "Circle sight with a red dot. 1.5x zoom. Some hipfire spread. 30-round mag",
   },
   {
     id: "shotgun", name: "Shotgun", damage: 7, interval: 0.34, mag: 2,
@@ -58,9 +58,9 @@ const WEAPONS = [
   },
   {
     id: "sniper", name: "Sniper", damage: 100, interval: 1.2, mag: 1,
-    reload: 1.35, pellets: 1, spread: 0, recoil: 0.03,
+    reload: 1.35, pellets: 1, spread: 0.18, recoil: 0.03,
     falloffStart: 1000, falloffEnd: 1001, minMult: 1,
-    hint: "Scope keeps the crosshair. One shot anywhere drops them.",
+    hint: "Scope is accurate. Hipfire is very wide. One aimed shot drops them.",
   },
   {
     id: "pistol", name: "Pistol", damage: 22, interval: 0.28, mag: 12,
@@ -2498,7 +2498,9 @@ function fireShot(attacker) {
   }
 
   const botSpread = attacker === bot ? (DIFFICULTY[difficulty] || DIFFICULTY.medium).spread : 0;
-  const spread = attacker === player ? playerShotSpread(weapon) : weapon.spread + botSpread;
+  // Sniper spread is hipfire. Bots never scope, so they keep the difficulty cone.
+  const gunSpread = weapon.id === "sniper" ? 0 : weapon.spread;
+  const spread = attacker === player ? playerShotSpread(weapon) : gunSpread + botSpread;
   let hitActor = null;
   let actorDamage = 0;
   let hitHead = false;
@@ -2555,7 +2557,7 @@ function fireShot(attacker) {
 }
 
 function playerShotSpread(weapon) {
-  const adsScale = 1 - 0.8 * ads;
+  const adsScale = weapon.id === "sniper" ? (1 - ads) : (1 - 0.8 * ads);
   let spread = weapon.spread * adsScale;
   if (weapon.id === "smg") {
     const speed = Math.hypot(player.vx, player.vz);
@@ -3346,20 +3348,20 @@ function runSelfTest() {
   check(HOLE_RADIUS.smg === HOLE_RADIUS.ar && HOLE_RADIUS.ar < HOLE_RADIUS.sniper
     && HOLE_RADIUS.sniper < HOLE_RADIUS.shotgun, "bullet holes are not sized by gun");
   check(smg.mag === 30 && ar.mag === 30, "SMG or AR mag is not 30");
-  check(smg.spread === 0.052 && ar.spread === 0, "rifle spread changed");
+  check(smg.spread === 0.052 && ar.spread === 0.03, "rifle spread changed");
   player.weapon = 1;
   player.vx = 0;
   player.vz = 0;
   ads = 0;
   hipBloom = 0;
-  check(playerShotSpread(ar) === 0, "standing AR hipfire has spread");
+  check(playerShotSpread(ar) === ar.spread, "standing AR hipfire is not the base cone");
   player.vx = SPRINT_SPEED;
-  check(playerShotSpread(ar) === 0, "moving opened the AR");
+  check(playerShotSpread(ar) === ar.spread, "moving opened the AR");
   player.vx = 0;
   hipBloom = 0.02;
-  check(playerShotSpread(ar) === 0, "firing opened the AR");
+  check(playerShotSpread(ar) === ar.spread, "firing opened the AR");
   ads = 1;
-  check(playerShotSpread(ar) === 0, "ADS added AR spread");
+  check(Math.abs(playerShotSpread(ar) - ar.spread * (1 - 0.8)) < 1e-9, "ADS did not tighten the AR");
   ads = 0;
   hipBloom = 0;
   player.weapon = 0;
@@ -3392,7 +3394,13 @@ function runSelfTest() {
   check(shotgun.mag === 2 && shotgun.pellets === 20 && shotgun.damage === 7 && shotgun.spread === 0.12, "shotgun is not 20 pellets of 7");
   check(shotgunHoleRadius(1) === HOLE_RADIUS.shotgun && shotgunHoleRadius(12) === SHOTGUN_FAR_HOLE
     && SHOTGUN_FAR_HOLE < HOLE_RADIUS.ar, "shotgun holes do not shrink with distance");
-  check(sniper.mag === 1 && sniper.damage === 100 && sniper.spread === 0, "sniper mag is not 1");
+  check(sniper.mag === 1 && sniper.damage === 100 && sniper.spread > shotgun.spread, "sniper mag is not 1");
+  ads = 0;
+  hipBloom = 0;
+  check(playerShotSpread(sniper) === sniper.spread, "sniper hipfire was tightened");
+  ads = 1;
+  check(playerShotSpread(sniper) === 0, "scoped sniper still has spread");
+  ads = 0;
   check(shotgun.pellets * shotgun.damage * falloff(shotgun, 1) >= 100, "shotgun does not one-tap up close");
   check(shotgun.pellets * shotgun.damage * falloff(shotgun, 14) < 30, "shotgun dropoff is too weak");
   check(falloff(sniper, 40) === 1, "sniper damage changes with distance");
@@ -3590,6 +3598,8 @@ function runSelfTest() {
   bot.health = 100;
   bot.alive = true;
   bot.spawnLock = 0;
+  ads = 1;
+  hipBloom = 0;
   fireShot(player);
   check(!bot.alive, "sniper aimed low did not drop the opponent");
 
@@ -3610,7 +3620,10 @@ function runSelfTest() {
   bot.health = 100;
   bot.alive = true;
   bot.spawnLock = 0;
+  ads = 1;
+  hipBloom = 0;
   fireShot(player);
+  ads = 0;
   check(!bot.alive, "sniper aimed at the body did not drop the opponent");
 
   bot.x = 0;
@@ -3671,7 +3684,10 @@ function runSelfTest() {
   player.cooldown = 0;
   player.reload = 0;
   player.alive = true;
+  ads = 1;
+  hipBloom = 0;
   fireShot(player);
+  ads = 0;
   const outerUntouched = boxes.filter((box) => !box.breakable).every((box) => box.hp === Infinity);
   check(beforeOuter && outerUntouched, "outer cuboid took damage");
 
@@ -3699,7 +3715,10 @@ function runSelfTest() {
     bot.alive = false;
     const sight = trace(player.x, EYE, player.z, 1, 0, 0, player);
     check(sight && sight.box === panel, "center shot did not hit the wall section");
+    ads = 1;
+    hipBloom = 0;
     fireShot(player);
+    ads = 0;
     const sniperHole = panel.holes[0];
     check(panel.holes.length === 1 && sniperHole && Math.abs(sniperHole.r - HOLE_RADIUS.sniper) < 0.001
       && panel.mesh.visible && panel.hp === panel.maxHp
@@ -4089,7 +4108,10 @@ function runSelfTest() {
   bot.alive = true;
   bot.health = 100;
   bot.spawnLock = 0;
+  ads = 1;
+  hipBloom = 0;
   fireShot(player);
+  ads = 0;
   check(bot.health === 100, "online shot applied damage locally");
   check(netEvents.some((event) => event.type === "hurt" && event.amount >= 100), "online shot did not send hurt");
   check(netEvents.some((event) => event.type === "shot" && event.kind === "shot"), "online shot did not send the gunshot");
@@ -4115,7 +4137,10 @@ function runSelfTest() {
   player.reload = 0;
   player.ammo = freshAmmo();
   bot.alive = false;
+  ads = 1;
+  hipBloom = 0;
   fireShot(player);
+  ads = 0;
   check(netPanel.holes.length > 0 && netPanel.hp === netPanel.maxHp, "online shot did not damage the wall section");
   check(netEvents.some((event) => event.type === "wall" && event.id === netPanel.id && event.holes && event.holes.length > 0), "online shot did not send wall damage");
   netEvents.length = 0;
