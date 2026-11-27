@@ -25,6 +25,7 @@ const SHOTGUN_CONE_MIN = 0.04;
 const SHOTGUN_CONE_MAX = 0.28;
 const SHOTGUN_ZOOM_FOV = 46;
 const SHOTGUN_ZOOM_TIME = 5;
+const SNIPER_DOUBLE_TIME = 7.5;
 const WALL_HP = 100;
 const SPAWN_LOCK = 1.5;
 const ROUND_WAIT = 3;
@@ -68,7 +69,7 @@ const WEAPONS = [
     id: "sniper", name: "Sniper", damage: 100, interval: 1.2, mag: 1,
     reload: 1.35, pellets: 1, spread: 0.18, recoil: 0.03,
     falloffStart: 1000, falloffEnd: 1001, minMult: 1,
-    hint: "Scope is accurate. Hipfire is very wide. X makes the next shot triple. Into an SMG shield, that shot breaks it and deals 100.",
+    hint: "Scope is accurate. Hipfire is very wide. X puts 2 shots in the mag for 7.5 seconds.",
   },
   {
     id: "pistol", name: "Pistol", damage: 22, interval: 0.28, mag: 12,
@@ -256,7 +257,7 @@ function makeActor(spawnX, spawnZ) {
     abilityUsed: false,
     damageBuff: 0,
     shotgunZoom: 0,
-    sniperAmp: false,
+    sniperDouble: 0,
     hurtIdle: 0,
     nextRegen: REGEN_DELAY,
     shotCone: 0.12,
@@ -1378,10 +1379,15 @@ function addTracer(from, to, color) {
   tracers.push({ line, life: 0.045 });
 }
 
+function magSize(actor, weapon) {
+  if (actor === player && weapon.id === "sniper" && player.sniperDouble > 0) return 2;
+  return weapon.mag;
+}
+
 function startReload(actor) {
   const weapon = WEAPONS[actor.weapon];
   if (actor.reload > 0) return;
-  if (actor.ammo[weapon.id] >= weapon.mag) return;
+  if (actor.ammo[weapon.id] >= magSize(actor, weapon)) return;
   actor.reload = weapon.reload;
   actor.reloadId = weapon.id;
 }
@@ -2506,7 +2512,7 @@ function resetCombatExtras(actor) {
   actor.abilityUsed = false;
   actor.damageBuff = 0;
   actor.shotgunZoom = 0;
-  actor.sniperAmp = false;
+  actor.sniperDouble = 0;
   actor.hurtIdle = 0;
   actor.nextRegen = REGEN_DELAY;
   actor.shotCone = 0.12;
@@ -2529,8 +2535,13 @@ function tickRegen(actor, dt) {
 function shotDamageMult(attacker, weapon) {
   let mult = 1;
   if (attacker === player && weapon.id === "ar" && player.damageBuff > 0) mult *= 2;
-  if (attacker === player && weapon.id === "sniper" && player.sniperAmp) mult *= 3;
   return mult;
+}
+
+function tickSniperDouble(dt) {
+  if (!(player.sniperDouble > 0)) return;
+  player.sniperDouble = Math.max(0, player.sniperDouble - dt);
+  if (player.sniperDouble === 0 && player.ammo.sniper > 1) player.ammo.sniper = 1;
 }
 
 function applyDamage(actor, amount, info) {
@@ -2580,7 +2591,12 @@ function useAbility() {
     player.damageBuff = 5;
   } else if (weapon.id === "sniper") {
     player.abilityUsed = true;
-    player.sniperAmp = true;
+    player.sniperDouble = SNIPER_DOUBLE_TIME;
+    player.ammo.sniper = 2;
+    if (player.reloadId === "sniper") {
+      player.reload = 0;
+      player.reloadId = null;
+    }
   } else if (weapon.id === "shotgun") {
     player.abilityUsed = true;
     player.shield = SHIELD_HP;
@@ -2686,8 +2702,6 @@ function fireShot(attacker) {
   const gunSpread = weapon.id === "sniper" ? 0 : weapon.spread;
   const spread = attacker === player ? playerShotSpread(weapon) : gunSpread + botSpread;
   const damageMult = shotDamageMult(attacker, weapon);
-  const sniperPierce = attacker === player && weapon.id === "sniper" && player.sniperAmp;
-  if (sniperPierce) player.sniperAmp = false;
   let hitActor = null;
   let actorDamage = 0;
   let hitHead = false;
@@ -2729,7 +2743,6 @@ function fireShot(attacker) {
           amount: actorDamage,
           target: hitActor.seat,
           killer: mySeat,
-          pierce: sniperPierce,
           dx: direction.x,
           dy: direction.y,
           dz: direction.z,
@@ -2738,7 +2751,7 @@ function fireShot(attacker) {
       }
     } else if (hitActor.spawnLock <= 0) {
       const healthBefore = hitActor.health;
-      const landed = applyDamage(hitActor, actorDamage, { fromFront, sniperPierce });
+      const landed = applyDamage(hitActor, actorDamage, { fromFront });
       if (attacker === player && hitActor !== player && landed) {
         showHitMarker(hitActor.health <= 0, hitHead && hitActor.health < healthBefore);
       }
@@ -3115,7 +3128,7 @@ function tickActor(actor, dt) {
     if (actor.reload <= 0) {
       actor.reload = 0;
       const reloaded = WEAPONS.find((weapon) => weapon.id === actor.reloadId);
-      if (reloaded) actor.ammo[reloaded.id] = reloaded.mag;
+      if (reloaded) actor.ammo[reloaded.id] = magSize(actor, reloaded);
     }
   }
 }
@@ -3157,6 +3170,7 @@ function update(dt) {
   } else {
     if (player.damageBuff > 0) player.damageBuff = Math.max(0, player.damageBuff - dt);
     if (player.shotgunZoom > 0) player.shotgunZoom = Math.max(0, player.shotgunZoom - dt);
+    tickSniperDouble(dt);
     tickRegen(player, dt);
     if (mode !== "net") tickRegen(bot, dt);
     updatePlayer(dt);
@@ -3221,12 +3235,12 @@ function abilityLine() {
   const gun = WEAPONS[player.weapon] ? WEAPONS[player.weapon].id : "";
   if (player.damageBuff > 0) parts.push(`2x damage ${player.damageBuff.toFixed(1)}s`);
   if (player.shotgunZoom > 0) parts.push(`Zoom ${player.shotgunZoom.toFixed(1)}s`);
-  if (player.sniperAmp) parts.push("Next shot 3x");
+  if (player.sniperDouble > 0) parts.push(`2 shots ${player.sniperDouble.toFixed(1)}s`);
   if (!player.abilityUsed && roundIsLive()) {
     const key = keyLabel(binds.ability);
     if (gun === "smg") parts.push(`${key} raises a front shield`);
     else if (gun === "ar") parts.push(`${key} doubles damage for 5s`);
-    else if (gun === "sniper") parts.push(`${key} loads a triple shot`);
+    else if (gun === "sniper") parts.push(`${key} loads 2 shots for 7.5s`);
     else if (gun === "shotgun") parts.push(`${key} zooms for 5s and gives shield`);
   }
   return parts.join("  ·  ");
@@ -3283,7 +3297,7 @@ function paintHud() {
   poseShields();
   name.textContent = weapon.name;
   if (player.reload > 0) ammo.textContent = "Reloading";
-  else ammo.textContent = `${player.ammo[weapon.id]} / ${weapon.mag}`;
+  else ammo.textContent = `${player.ammo[weapon.id]} / ${magSize(player, weapon)}`;
   if (repairTarget && held("repair")) {
     hint.textContent = `Repairing ${Math.min(100, Math.round((repair / REPAIR_TIME) * 100))}%`;
   } else if (!matchOver && roundWait > 0) {
@@ -3696,7 +3710,7 @@ function runSelfTest() {
   player.frontShield = 0;
   player.abilityUsed = false;
   player.damageBuff = 0;
-  player.sniperAmp = false;
+  player.sniperDouble = 0;
   player.weapon = 1;
   useAbility();
   check(player.damageBuff === 5 && shotDamageMult(player, WEAPONS[1]) === 2, "AR did not double damage");
@@ -3705,8 +3719,20 @@ function runSelfTest() {
   check(player.damageBuff === 0, "AR buff did not end");
   player.abilityUsed = false;
   player.weapon = 3;
+  player.ammo.sniper = 0;
+  player.reload = 1;
+  player.reloadId = "sniper";
   useAbility();
-  check(player.sniperAmp === true && shotDamageMult(player, WEAPONS[3]) === 3, "sniper did not arm a triple shot");
+  check(player.sniperDouble === SNIPER_DOUBLE_TIME && player.ammo.sniper === 2 && player.reload === 0 && magSize(player, WEAPONS[3]) === 2, "sniper ability did not load 2 shots");
+  player.ammo.sniper = 0;
+  player.reload = 0.01;
+  player.reloadId = "sniper";
+  tickActor(player, 0.02);
+  check(player.ammo.sniper === 2 && player.reload === 0, "sniper reload ignored the extra shot");
+  player.ammo.sniper = 2;
+  player.sniperDouble = 0.4;
+  tickSniperDouble(1);
+  check(player.sniperDouble === 0 && player.ammo.sniper === 1 && magSize(player, WEAPONS[3]) === 1, "extra sniper shot stayed after 7.5 seconds");
 
   player.weapon = 2;
   player.abilityUsed = false;
