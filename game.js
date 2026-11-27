@@ -35,7 +35,7 @@ const THIN = 0.07;
 const SPAWN_A = [-18, 12];
 const SPAWN_B = [18, -12];
 const HOUSE_SPOTS = [[-18, 12], [18, -12], [-26, 20], [26, -20]];
-const YARD_SPOTS = [[-22, 22], [22, -22], [-22, -22], [22, 22]];
+const YARD_SPOTS = [[-12, 12], [12, -12], [-12, -12], [12, 12]];
 
 const WEAPONS = [
   {
@@ -360,6 +360,7 @@ function addBox(minX, minY, minZ, maxX, maxY, maxZ, color, breakable, material, 
     holes: [],
     axis: axis || null,
     holed: false,
+    wallMat: material || null,
   };
   nextId += 1;
   boxes.push(box);
@@ -367,7 +368,8 @@ function addBox(minX, minY, minZ, maxX, maxY, maxZ, color, breakable, material, 
   return box;
 }
 
-function addSectionWall(axis, fixed, from, to, height) {
+function addSectionWall(axis, fixed, from, to, height, wallMat) {
+  const skin = wallMat || drywallMat;
   const span = to - from;
   const cols = Math.max(1, Math.round(span / PIECE));
   const rows = Math.max(1, Math.round(height / PIECE));
@@ -380,13 +382,13 @@ function addSectionWall(axis, fixed, from, to, height) {
       const along = from + col * cell;
       const end = from + (col + 1) * cell;
       if (axis === "x") {
-        addBox(fixed - THIN / 2, y, along, fixed + THIN / 2, y1, end, 0xe7e1d6, true, drywallMat, "x");
+        addBox(fixed - THIN / 2, y, along, fixed + THIN / 2, y1, end, 0xe7e1d6, true, skin, "x");
       } else {
-        addBox(along, y, fixed - THIN / 2, end, y1, fixed + THIN / 2, 0xe7e1d6, true, drywallMat, "z");
+        addBox(along, y, fixed - THIN / 2, end, y1, fixed + THIN / 2, 0xe7e1d6, true, skin, "z");
       }
     }
   }
-  addHouseTrim(axis, fixed, from, to, height);
+  if (skin === drywallMat) addHouseTrim(axis, fixed, from, to, height);
 }
 
 function paintCanvas() {
@@ -418,6 +420,32 @@ function plasterTexture() {
         draw.ellipse(x + ox, y + oy, radius, radius * 0.65, 0, 0, Math.PI * 2);
         draw.fill();
       }
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function brickTexture() {
+  const canvas = paintCanvas();
+  const draw = canvas.getContext("2d");
+  const bricks = ["#8d4636", "#7a3c30", "#9a5644", "#6b342c"];
+  const brickW = 64;
+  const brickH = 32;
+  draw.fillStyle = "#cfc6b8";
+  draw.fillRect(0, 0, 256, 256);
+  for (let row = 0; row < 256 / brickH; row += 1) {
+    const y = row * brickH;
+    const offset = row % 2 === 0 ? 0 : brickW / 2;
+    for (let col = -1; col < 6; col += 1) {
+      const x = col * brickW + offset;
+      draw.fillStyle = bricks[(row + col + 4) % bricks.length];
+      draw.fillRect(x + 3, y + 3, brickW - 6, brickH - 6);
+      draw.fillStyle = "rgba(40,16,10,0.22)";
+      draw.fillRect(x + 3, y + brickH - 7, brickW - 6, 3);
     }
   }
   const texture = new THREE.CanvasTexture(canvas);
@@ -463,6 +491,11 @@ function woodFloorTexture() {
 const drywallMat = new THREE.MeshLambertMaterial({
   color: 0xffffff,
   map: plasterTexture(),
+  side: THREE.DoubleSide,
+});
+const yardWallMat = new THREE.MeshLambertMaterial({
+  color: 0xffffff,
+  map: brickTexture(),
   side: THREE.DoubleSide,
 });
 const floorMat = new THREE.MeshLambertMaterial({
@@ -528,14 +561,15 @@ function addShellTrim() {
   addTrimMesh(X0 + THICK, HEIGHT - 0.08, innerNorth - proud, X1 - THICK, HEIGHT, innerNorth, crownMat);
 }
 
-function buildOuterCuboid(ground) {
+function buildOuterCuboid(ground, wallMat) {
+  const skin = wallMat || drywallMat;
   addBox(X0, -THICK, Z0, X1, 0, Z1, 0xffffff, false, ground || floorMat, null);
   addBox(X0, HEIGHT, Z0, X1, HEIGHT + THICK, Z1, 0xf4f1ea, false, ceilingMat, null);
-  addBox(X0, 0, Z0, X0 + THICK, HEIGHT, Z1, 0xe7e1d6, false, drywallMat, "x");
-  addBox(X1 - THICK, 0, Z0, X1, HEIGHT, Z1, 0xe7e1d6, false, drywallMat, "x");
-  addBox(X0, 0, Z0, X1, HEIGHT, Z0 + THICK, 0xe7e1d6, false, drywallMat, "z");
-  addBox(X0, 0, Z1 - THICK, X1, HEIGHT, Z1, 0xe7e1d6, false, drywallMat, "z");
-  addShellTrim();
+  addBox(X0, 0, Z0, X0 + THICK, HEIGHT, Z1, 0xe7e1d6, false, skin, "x");
+  addBox(X1 - THICK, 0, Z0, X1, HEIGHT, Z1, 0xe7e1d6, false, skin, "x");
+  addBox(X0, 0, Z0, X1, HEIGHT, Z0 + THICK, 0xe7e1d6, false, skin, "z");
+  addBox(X0, 0, Z1 - THICK, X1, HEIGHT, Z1, 0xe7e1d6, false, skin, "z");
+  if (skin === drywallMat) addShellTrim();
 }
 
 function buildInnerWalls() {
@@ -574,14 +608,14 @@ function buildHouseWings() {
 
 function buildYardWalls() {
   const low = 2.25;
-  addSectionWall("x", -6, -10, -2, low);
-  addSectionWall("x", 6, 2, 10, low);
-  addSectionWall("z", -6, 2, 12, low);
-  addSectionWall("z", 6, -12, -2, low);
-  addSectionWall("x", 16, 14, 20, HEIGHT);
-  addSectionWall("x", -16, -20, -14, HEIGHT);
-  addSectionWall("z", 16, -20, -14, HEIGHT);
-  addSectionWall("z", -16, 14, 20, HEIGHT);
+  addSectionWall("x", -4, -6, -1, low, yardWallMat);
+  addSectionWall("x", 4, 1, 6, low, yardWallMat);
+  addSectionWall("z", -4, 1, 7, low, yardWallMat);
+  addSectionWall("z", 4, -7, -1, low, yardWallMat);
+  addSectionWall("x", 10, 8, 12, HEIGHT, yardWallMat);
+  addSectionWall("x", -10, -12, -8, HEIGHT, yardWallMat);
+  addSectionWall("z", 10, -12, -8, HEIGHT, yardWallMat);
+  addSectionWall("z", -10, 8, 12, HEIGHT, yardWallMat);
 }
 
 function clearMap() {
@@ -611,15 +645,15 @@ function loadMap(id) {
   mapId = id === "yard" ? "yard" : "house";
   clearMap();
   if (mapId === "yard") {
-    X0 = -28;
-    X1 = 28;
-    Z0 = -28;
-    Z1 = 28;
+    X0 = -18;
+    X1 = 18;
+    Z0 = -18;
+    Z1 = 18;
     if (!yardFloorMat) {
       yardFloorMat = floorMat.clone();
       yardFloorMat.color.setHex(0xb7c4a4);
     }
-    buildOuterCuboid(yardFloorMat);
+    buildOuterCuboid(yardFloorMat, yardWallMat);
     buildYardWalls();
   } else {
     X0 = -32;
@@ -1278,7 +1312,8 @@ function restoreWalls() {
     box.mesh.visible = true;
     if (box.holes) box.holes.length = 0;
     if (opened) {
-      if (box.mesh.material !== drywallMat) box.mesh.material = drywallMat;
+      const skin = box.wallMat || drywallMat;
+      if (box.mesh.material !== skin) box.mesh.material = skin;
       box.holed = false;
       clearHoleRings(box);
     }
@@ -2095,14 +2130,15 @@ function addHoleRings(box) {
 
 function syncHoleMaterial(box) {
   if (!box.mesh || !box.axis) return;
+  const skin = box.wallMat || drywallMat;
   if (!box.holes.length) {
-    if (box.mesh.material !== drywallMat) box.mesh.material = drywallMat;
+    if (box.mesh.material !== skin) box.mesh.material = skin;
     box.holed = false;
     box.mesh.visible = true;
     return;
   }
   if (!box.holeMat) {
-    const mat = drywallMat.clone();
+    const mat = skin.clone();
     const holeList = new Float32Array(MAX_HOLES * 3);
     const alongSpan = box.axis === "x" ? box.maxZ - box.minZ : box.maxX - box.minX;
     const height = box.maxY - box.minY;
@@ -4130,9 +4166,15 @@ function runSelfTest() {
   check(X1 - X0 >= 60 && Z1 - Z0 >= 44, "house did not grow");
   check(seamThere(), "house seam missing");
   loadMap("yard");
-  check(mapId === "yard" && X1 - X0 === 56 && Z1 - Z0 === 56, `yard is ${X1 - X0} by ${Z1 - Z0}`);
+  check(mapId === "yard" && X1 - X0 === 36 && Z1 - Z0 === 36, `yard is ${X1 - X0} by ${Z1 - Z0}`);
+  check(X1 - X0 < 64 && Z1 - Z0 < 48, "yard is not smaller than the house");
   check(boxes.filter((box) => !box.breakable).length === 6, "yard shell is not six pieces");
   check(boxes.some((box) => box.breakable && box.maxY < 3 && box.maxY > 1), "yard has no low cover");
+  check(boxes.some((box) => box.breakable && box.mesh.material === yardWallMat), "yard walls are still plaster");
+  check(boxes.filter((box) => !box.breakable && box.maxY > 1 && box.minY < HEIGHT && box.mesh.material === yardWallMat).length === 4, "yard shell is still plaster");
+  const brickPx = yardWallMat.map.image.getContext("2d").getImageData(20, 20, 1, 1).data;
+  const plasterPx = drywallMat.map.image.getContext("2d").getImageData(20, 20, 1, 1).data;
+  check(Math.abs(brickPx[0] - plasterPx[0]) > 40, "yard brick matches the house plaster");
   loadMap("house");
   check(X1 - X0 >= 60 && Z1 - Z0 >= 44, "house did not return");
   check(seamThere(), "house seam missing after the yard");
