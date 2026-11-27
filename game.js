@@ -17,6 +17,12 @@ const LEAN_ROLL = 0.08;
 const FOOT_GAIN = { sprint: 0.9, walk: 0.42, crouch: 0.11 };
 const WIN_SCORE = 5;
 const MAX_HEALTH = 200;
+const REGEN_DELAY = 5;
+const REGEN_EVERY = 2;
+const REGEN_AMOUNT = 3;
+const SHIELD_HP = 100;
+const SHOTGUN_CONE_MIN = 0.04;
+const SHOTGUN_CONE_MAX = 0.28;
 const WALL_HP = 100;
 const SPAWN_LOCK = 1.5;
 const ROUND_WAIT = 3;
@@ -42,25 +48,25 @@ const WEAPONS = [
     id: "smg", name: "SMG", damage: 11, interval: 0.05, mag: 30,
     reload: 1.25, pellets: 1, spread: 0.052, recoil: 0.038,
     falloffStart: 8, falloffEnd: 28, minMult: 0.8,
-    hint: "Circle sight with a red dot. No zoom. Fast shots, harder kick, 30-round mag",
+    hint: "X raises a 100 HP front shield. Hipfire only, and no pistol, until it breaks.",
   },
   {
     id: "ar", name: "AR", damage: 30, interval: 0.16, mag: 30,
     reload: 1.5, pellets: 1, spread: 0.03, recoil: 0.022,
     falloffStart: 20, falloffEnd: 45, minMult: 0.72,
-    hint: "Circle sight with a red dot. 1.5x zoom. Some hipfire spread. 30-round mag",
+    hint: "Circle sight, 1.5x zoom, some hipfire spread. X doubles damage for 5 seconds.",
   },
   {
     id: "shotgun", name: "Shotgun", damage: 7, interval: 0.34, mag: 2,
     reload: 1.7, pellets: 20, spread: 0.12, recoil: 0.02,
     falloffStart: 2.5, falloffEnd: 12, minMult: 0.08,
-    hint: "Double barrel. 20 pellets. Big hole up close, scattered holes at range.",
+    hint: "Scroll changes the hipfire circle. Scoping once a round gives 100 shield. It does not come back.",
   },
   {
     id: "sniper", name: "Sniper", damage: 100, interval: 1.2, mag: 1,
     reload: 1.35, pellets: 1, spread: 0.18, recoil: 0.03,
     falloffStart: 1000, falloffEnd: 1001, minMult: 1,
-    hint: "Scope is accurate. Hipfire is very wide. One aimed shot drops them.",
+    hint: "Scope is accurate. Hipfire is very wide. X makes the next shot triple. Into an SMG shield, that shot breaks it and deals 100.",
   },
   {
     id: "pistol", name: "Pistol", damage: 22, interval: 0.28, mag: 12,
@@ -140,6 +146,7 @@ const DEFAULT_BINDS = {
   repair: "KeyE",
   primary: "Digit1",
   pistol: "Digit2",
+  ability: "KeyX",
 };
 const BIND_ORDER = [
   ["forward", "Move forward"],
@@ -154,6 +161,7 @@ const BIND_ORDER = [
   ["repair", "Repair"],
   ["primary", "Primary weapon"],
   ["pistol", "Pistol"],
+  ["ability", "Ability"],
 ];
 const binds = { ...DEFAULT_BINDS };
 const SETTINGS_KEY = "arena-settings";
@@ -241,6 +249,15 @@ function makeActor(spawnX, spawnZ) {
     stepX: spawnX,
     stepZ: spawnZ,
     stepCarry: 0,
+    shield: 0,
+    frontShield: 0,
+    abilityUsed: false,
+    damageBuff: 0,
+    sniperAmp: false,
+    hurtIdle: 0,
+    nextRegen: REGEN_DELAY,
+    shotCone: 0.12,
+    shieldMesh: null,
     mesh: null,
     visor: null,
     rig: null,
@@ -1050,7 +1067,8 @@ function poseOpponent() {
 }
 
 function updateAds(dt) {
-  const want = adsHeld && playing && player.alive && roundWait <= 0 && !matchOver ? 1 : 0;
+  const hipOnly = player.frontShield > 0;
+  const want = !hipOnly && adsHeld && playing && player.alive && roundWait <= 0 && !matchOver ? 1 : 0;
   ads += (want - ads) * Math.min(1, dt * 12);
   placeGun();
   const pose = POSES[WEAPONS[player.weapon].id];
@@ -1405,6 +1423,7 @@ function newBotRoute() {
 }
 
 function respawn(actor) {
+  resetCombatExtras(actor);
   actor.x = actor.spawnX;
   actor.z = actor.spawnZ;
   actor.health = MAX_HEALTH;
@@ -1469,6 +1488,7 @@ function choosePrimary(id) {
 
 function selectWeapon(slot) {
   if (roundIsLive()) {
+    if (player.frontShield > 0 && slot === 2) return;
     if (slot === 1) equipPlayer(weaponById(primaryId));
     if (slot === 2) equipPlayer(weaponById("pistol"));
     return;
@@ -1488,7 +1508,11 @@ function beginRound() {
     mateB.alive = false;
   } else {
     for (const actor of [bot, mateA, mateB]) {
-      if (actor.seat >= 0 && actor.present) actor.alive = true;
+      if (actor.seat >= 0 && actor.present) {
+        actor.alive = true;
+        resetCombatExtras(actor);
+        actor.health = MAX_HEALTH;
+      }
     }
   }
   roundWait = 0;
@@ -2358,9 +2382,15 @@ function applyEvent(event) {
   if (event.type === "hurt") {
     if (typeof event.target === "number" && event.target !== mySeat) return;
     if (!player.alive || player.spawnLock > 0 || matchOver || roundWait > 0) return;
-    const before = player.health;
-    player.health -= event.amount;
-    if (player.health < before) damageFlash = 0.18;
+    let fromFront = false;
+    if (typeof event.dx === "number" || typeof event.dy === "number" || typeof event.dz === "number") {
+      const incoming = new THREE.Vector3(Number(event.dx) || 0, Number(event.dy) || 0, Number(event.dz) || 0);
+      if (incoming.lengthSq() > 1e-8) fromFront = shotFacesShield(player, incoming);
+    }
+    applyDamage(player, Number(event.amount) || 0, {
+      fromFront,
+      sniperPierce: Boolean(event.pierce),
+    });
     if (player.health <= 0) {
       player.alive = false;
       player.health = 0;
@@ -2424,6 +2454,8 @@ function applyRemote(state, seat) {
   actor.yaw = state.yaw || 0;
   if (typeof state.pitch === "number") actor.pitch = state.pitch;
   actor.health = state.health;
+  if (typeof state.shield === "number") actor.shield = state.shield;
+  if (typeof state.frontShield === "number") actor.frontShield = state.frontShield;
   actor.weapon = state.weapon || 0;
   actor.alive = Boolean(state.alive);
   actor.kills = state.kills || 0;
@@ -2435,6 +2467,144 @@ function applyRemote(state, seat) {
     matchOver = true;
     resetIn = 4;
     banner = "Opponent wins";
+  }
+}
+
+const facingRig = new THREE.Object3D();
+
+function actorForward(actor) {
+  facingRig.rotation.set(0, actor.yaw || 0, 0);
+  facingRig.updateMatrix();
+  return new THREE.Vector3(0, 0, -1).applyQuaternion(facingRig.quaternion);
+}
+
+function shotFacesShield(actor, direction) {
+  if (!actor || !(actor.frontShield > 0) || !direction) return false;
+  return direction.dot(actorForward(actor)) < -0.05;
+}
+
+function resetCombatExtras(actor) {
+  actor.shield = 0;
+  actor.frontShield = 0;
+  actor.abilityUsed = false;
+  actor.damageBuff = 0;
+  actor.sniperAmp = false;
+  actor.hurtIdle = 0;
+  actor.nextRegen = REGEN_DELAY;
+  actor.shotCone = 0.12;
+}
+
+function noteDamage(actor) {
+  actor.hurtIdle = 0;
+  actor.nextRegen = REGEN_DELAY;
+}
+
+function tickRegen(actor, dt) {
+  if (!actor.alive || actor.health >= MAX_HEALTH) return;
+  actor.hurtIdle += dt;
+  while (actor.health < MAX_HEALTH && actor.hurtIdle + 1e-9 >= actor.nextRegen) {
+    actor.health = Math.min(MAX_HEALTH, actor.health + REGEN_AMOUNT);
+    actor.nextRegen += REGEN_EVERY;
+  }
+}
+
+function shotDamageMult(attacker, weapon) {
+  let mult = 1;
+  if (attacker === player && weapon.id === "ar" && player.damageBuff > 0) mult *= 2;
+  if (attacker === player && weapon.id === "sniper" && player.sniperAmp) mult *= 3;
+  return mult;
+}
+
+function applyDamage(actor, amount, info) {
+  const hit = info || {};
+  if (!actor || !actor.alive || actor.spawnLock > 0 || !(amount > 0)) return false;
+  let left = amount;
+  let touched = false;
+  if (hit.sniperPierce && hit.fromFront && actor.frontShield > 0) {
+    actor.frontShield = 0;
+    left = 100;
+    touched = true;
+  } else if (hit.fromFront && actor.frontShield > 0) {
+    const soaked = Math.min(actor.frontShield, left);
+    actor.frontShield -= soaked;
+    left -= soaked;
+    touched = soaked > 0;
+  }
+  if (left > 0 && actor.shield > 0) {
+    const soaked = Math.min(actor.shield, left);
+    actor.shield -= soaked;
+    left -= soaked;
+    touched = touched || soaked > 0;
+  }
+  if (left > 0) {
+    const before = actor.health;
+    actor.health -= left;
+    if (actor.health < before) touched = true;
+  }
+  if (touched) {
+    noteDamage(actor);
+    if (actor === player) damageFlash = 0.18;
+  }
+  if (actor.health < 0) actor.health = 0;
+  return touched;
+}
+
+function useAbility() {
+  if (!roundIsLive() || !player.alive || player.abilityUsed) return;
+  const weapon = WEAPONS[player.weapon];
+  if (!weapon) return;
+  if (weapon.id === "smg") {
+    player.abilityUsed = true;
+    player.frontShield = SHIELD_HP;
+    adsHeld = false;
+  } else if (weapon.id === "ar") {
+    player.abilityUsed = true;
+    player.damageBuff = 5;
+  } else if (weapon.id === "sniper") {
+    player.abilityUsed = true;
+    player.sniperAmp = true;
+  }
+}
+
+function grantShotgunShield() {
+  if (!roundIsLive() || !player.alive || player.abilityUsed) return;
+  const weapon = WEAPONS[player.weapon];
+  if (!weapon || weapon.id !== "shotgun") return;
+  player.abilityUsed = true;
+  player.shield = SHIELD_HP;
+}
+
+function adjustShotgunCone(direction) {
+  if (!playing || pauseOpen || !player.alive) return;
+  const weapon = WEAPONS[player.weapon];
+  if (!weapon || weapon.id !== "shotgun" || ads > 0.2) return;
+  const step = direction > 0 ? 0.02 : -0.02;
+  player.shotCone = clamp(player.shotCone + step, SHOTGUN_CONE_MIN, SHOTGUN_CONE_MAX);
+}
+
+function poseShields() {
+  for (const actor of [player, bot, mateA, mateB]) {
+    if (!actor.shieldMesh) {
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.96, 1.35),
+        new THREE.MeshBasicMaterial({
+          color: 0x8ec2ff,
+          transparent: true,
+          opacity: 0.28,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      scene.add(mesh);
+      actor.shieldMesh = mesh;
+    }
+    const show = Boolean(actor.alive && actor.frontShield > 0 && (actor === player || actor.seat >= 0));
+    actor.shieldMesh.visible = show && (actor === player || mode !== "net" || actor.present);
+    if (!actor.shieldMesh.visible) continue;
+    const forward = actorForward(actor);
+    actor.shieldMesh.position.set(actor.x, 1.15 - (actor.crouch || 0) * 0.35, actor.z);
+    actor.shieldMesh.position.addScaledVector(forward, 0.7);
+    actor.shieldMesh.lookAt(actor.shieldMesh.position.clone().add(forward));
   }
 }
 
@@ -2501,6 +2671,9 @@ function fireShot(attacker) {
   // Sniper spread is hipfire. Bots never scope, so they keep the difficulty cone.
   const gunSpread = weapon.id === "sniper" ? 0 : weapon.spread;
   const spread = attacker === player ? playerShotSpread(weapon) : gunSpread + botSpread;
+  const damageMult = shotDamageMult(attacker, weapon);
+  const sniperPierce = attacker === player && weapon.id === "sniper" && player.sniperAmp;
+  if (sniperPierce) player.sniperAmp = false;
   let hitActor = null;
   let actorDamage = 0;
   let hitHead = false;
@@ -2517,7 +2690,7 @@ function fireShot(attacker) {
     const end = origin.clone().addScaledVector(shot, hit ? hit.t : 40);
     addTracer(origin, end, weapon.id === "shotgun" ? 0xf0c14a : 0xffe7a3);
     if (!hit) continue;
-    const amount = weapon.damage * falloff(weapon, hit.t) * (hit.head ? headMult(weapon) : 1);
+    const amount = weapon.damage * falloff(weapon, hit.t) * (hit.head ? headMult(weapon) : 1) * damageMult;
     if (hit.actor) {
       hitActor = hit.actor;
       actorDamage += amount;
@@ -2534,17 +2707,26 @@ function fireShot(attacker) {
   }
 
   if (hitActor && actorDamage > 0) {
+    const fromFront = shotFacesShield(hitActor, direction);
     if (mode === "net") {
       if (hitActor !== player && hitActor.seat >= 0) {
-        queueEvent({ type: "hurt", amount: actorDamage, target: hitActor.seat, killer: mySeat });
+        queueEvent({
+          type: "hurt",
+          amount: actorDamage,
+          target: hitActor.seat,
+          killer: mySeat,
+          pierce: sniperPierce,
+          dx: direction.x,
+          dy: direction.y,
+          dz: direction.z,
+        });
         if (attacker === player) showHitMarker(false, hitHead);
       }
     } else if (hitActor.spawnLock <= 0) {
-      const before = hitActor.health;
-      hitActor.health -= actorDamage;
-      if (hitActor === player && hitActor.health < before) damageFlash = 0.18;
-      if (attacker === player && hitActor !== player && hitActor.health < before) {
-        showHitMarker(hitActor.health <= 0, hitHead);
+      const healthBefore = hitActor.health;
+      const landed = applyDamage(hitActor, actorDamage, { fromFront, sniperPierce });
+      if (attacker === player && hitActor !== player && landed) {
+        showHitMarker(hitActor.health <= 0, hitHead && hitActor.health < healthBefore);
       }
       if (hitActor.health <= 0) kill(hitActor, attacker);
     }
@@ -2558,7 +2740,8 @@ function fireShot(attacker) {
 
 function playerShotSpread(weapon) {
   const adsScale = weapon.id === "sniper" ? (1 - ads) : (1 - 0.8 * ads);
-  let spread = weapon.spread * adsScale;
+  const base = weapon.id === "shotgun" ? player.shotCone : weapon.spread;
+  let spread = base * adsScale;
   if (weapon.id === "smg") {
     const speed = Math.hypot(player.vx, player.vz);
     const move = (MOVE_SPREAD[weapon.id] || 0) * Math.min(1, speed / SPRINT_SPEED);
@@ -2585,7 +2768,7 @@ function updateCrosshair() {
   const weapon = WEAPONS[player.weapon];
   const shotgun = weapon.id === "shotgun";
   cross.classList.toggle("shotgun", shotgun);
-  const px = spreadPixels(shotgun ? weapon.spread : playerShotSpread(weapon));
+  const px = spreadPixels(shotgun ? player.shotCone : playerShotSpread(weapon));
   const ring = cross.querySelector(".ring");
   if (ring) {
     const size = Math.max(28, px * 2);
@@ -2958,6 +3141,9 @@ function update(dt) {
     roundWait -= dt;
     if (roundWait <= 0) beginRound();
   } else {
+    if (player.damageBuff > 0) player.damageBuff = Math.max(0, player.damageBuff - dt);
+    tickRegen(player, dt);
+    if (mode !== "net") tickRegen(bot, dt);
     updatePlayer(dt);
     updateBot(dt);
     updateRepair(dt);
@@ -3005,12 +3191,29 @@ function resetMatch() {
     for (const actor of [bot, mateA, mateB]) {
       if (actor.present && actor.seat >= 0) {
         actor.alive = true;
+        resetCombatExtras(actor);
         actor.health = MAX_HEALTH;
       }
     }
   }
   equipPlayer(weaponById(primaryId));
   player.yaw = Math.atan2(-(bot.spawnX - player.spawnX), -(bot.spawnZ - player.spawnZ));
+}
+
+function abilityLine() {
+  if (!playing || !player.alive) return "";
+  const parts = [];
+  const gun = WEAPONS[player.weapon] ? WEAPONS[player.weapon].id : "";
+  if (player.damageBuff > 0) parts.push(`2x damage ${player.damageBuff.toFixed(1)}s`);
+  if (player.sniperAmp) parts.push("Next shot 3x");
+  if (!player.abilityUsed && roundIsLive()) {
+    const key = keyLabel(binds.ability);
+    if (gun === "smg") parts.push(`${key} raises a front shield`);
+    else if (gun === "ar") parts.push(`${key} doubles damage for 5s`);
+    else if (gun === "sniper") parts.push(`${key} loads a triple shot`);
+    else if (gun === "shotgun") parts.push("Scope for 100 shield. Scroll changes hipfire");
+  }
+  return parts.join("  ·  ");
 }
 
 function showHitMarker(kill, head) {
@@ -3050,6 +3253,18 @@ function paintHud() {
   const hp = Math.max(0, Math.ceil(player.health));
   health.textContent = player.alive ? `Health ${hp}` : "Health 0";
   fill.style.width = `${(hp / MAX_HEALTH) * 100}%`;
+  const shieldHp = Math.ceil(Math.max(0, player.frontShield || 0) + Math.max(0, player.shield || 0));
+  const shieldLabel = document.getElementById("shield-label");
+  const shieldFill = document.getElementById("shield-fill");
+  const ability = document.getElementById("ability");
+  if (shieldLabel) {
+    if (player.frontShield > 0) shieldLabel.textContent = `Front shield ${Math.ceil(player.frontShield)}`;
+    else if (player.shield > 0) shieldLabel.textContent = `Shield ${Math.ceil(player.shield)}`;
+    else shieldLabel.textContent = "";
+  }
+  if (shieldFill) shieldFill.style.width = shieldHp > 0 ? `${Math.min(100, (shieldHp / SHIELD_HP) * 100)}%` : "0%";
+  if (ability) ability.textContent = abilityLine();
+  poseShields();
   name.textContent = weapon.name;
   if (player.reload > 0) ammo.textContent = "Reloading";
   else ammo.textContent = `${player.ammo[weapon.id]} / ${weapon.mag}`;
@@ -3158,7 +3373,8 @@ function runSelfTest() {
   check(basis.right.distanceTo(new THREE.Vector3(1, 0, 0)) < 0.001, "right is not +x");
   check(binds.forward === "KeyW" && binds.back === "KeyS" && binds.left === "KeyA" && binds.right === "KeyD"
     && binds.repair === "KeyE" && binds.reload === "KeyR" && binds.sprint === "ShiftLeft"
-    && binds.crouch === "ControlLeft" && binds.leanLeft === "KeyQ" && binds.leanRight === "KeyF",
+    && binds.crouch === "ControlLeft" && binds.leanLeft === "KeyQ" && binds.leanRight === "KeyF"
+    && binds.ability === "KeyX",
   "default keybinds changed");
   playSpatial("sprint", 4, EYE, 0, footGain("sprint"), false);
   const hearRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
@@ -3401,6 +3617,112 @@ function runSelfTest() {
   ads = 1;
   check(playerShotSpread(sniper) === 0, "scoped sniper still has spread");
   ads = 0;
+
+  const heldPrimary = primaryId;
+  player.yaw = 0;
+  player.pitch = 0;
+  bot.yaw = 0;
+  bot.x = 0;
+  bot.z = 0;
+  bot.alive = true;
+  bot.spawnLock = 0;
+  player.alive = true;
+  check(actorForward(bot).dot(playerPlanarBasis().forward) > 0.999, "shield facing left the look direction");
+  bot.frontShield = SHIELD_HP;
+  check(shotFacesShield(bot, new THREE.Vector3(0, 0, 1)), "a shot into the front missed the shield");
+  check(!shotFacesShield(bot, new THREE.Vector3(0, 0, -1)), "a shot into the back hit the shield");
+  poseShields();
+  const shieldPlace = new THREE.Vector3(bot.shieldMesh.position.x - bot.x, 0, bot.shieldMesh.position.z - bot.z);
+  check(shieldPlace.dot(playerPlanarBasis().forward) > 0.5, "front shield is not in front of the look direction");
+
+  player.health = 100;
+  player.hurtIdle = 0;
+  player.nextRegen = REGEN_DELAY;
+  tickRegen(player, 4.9);
+  check(player.health === 100, "regen started before 5 seconds");
+  tickRegen(player, 0.1);
+  check(player.health === 103, "regen did not pay 3 at 5 seconds");
+  tickRegen(player, 2);
+  check(player.health === 106, "regen is not 3 every 2 seconds");
+
+  primaryId = "smg";
+  player.weapon = 0;
+  player.abilityUsed = false;
+  player.frontShield = 0;
+  player.shield = 0;
+  useAbility();
+  check(player.frontShield === SHIELD_HP && player.abilityUsed === true, "SMG shield did not arm");
+  const smgSlot = player.weapon;
+  selectWeapon(2);
+  check(player.weapon === smgSlot, "SMG shield allowed the pistol");
+  ads = 0.8;
+  adsHeld = true;
+  updateAds(1);
+  check(ads < 0.05, "SMG shield allowed aiming");
+  adsHeld = false;
+  useAbility();
+  check(player.frontShield === SHIELD_HP, "SMG shield stacked in one round");
+
+  bot.health = 200;
+  bot.frontShield = SHIELD_HP;
+  bot.shield = 0;
+  applyDamage(bot, 300, { fromFront: shotFacesShield(bot, new THREE.Vector3(0, 0, 1)), sniperPierce: true });
+  check(bot.frontShield === 0 && bot.health === 100, `sniper shield hit left shield ${bot.frontShield} and health ${bot.health}`);
+  bot.frontShield = 80;
+  bot.health = 200;
+  applyDamage(bot, 30, { fromFront: shotFacesShield(bot, new THREE.Vector3(0, 0, -1)), sniperPierce: false });
+  check(bot.frontShield === 80 && bot.health === 170, "a shot from behind was caught by the shield");
+  bot.frontShield = SHIELD_HP;
+  bot.health = 200;
+  applyDamage(bot, 40, { fromFront: true, sniperPierce: false });
+  check(bot.frontShield === 60 && bot.health === 200, "front shield did not soak the shot");
+
+  player.frontShield = 0;
+  player.abilityUsed = false;
+  player.damageBuff = 0;
+  player.sniperAmp = false;
+  player.weapon = 1;
+  useAbility();
+  check(player.damageBuff === 5 && shotDamageMult(player, WEAPONS[1]) === 2, "AR did not double damage");
+  player.damageBuff = 0.4;
+  player.damageBuff = Math.max(0, player.damageBuff - 1);
+  check(player.damageBuff === 0, "AR buff did not end");
+  player.abilityUsed = false;
+  player.weapon = 3;
+  useAbility();
+  check(player.sniperAmp === true && shotDamageMult(player, WEAPONS[3]) === 3, "sniper did not arm a triple shot");
+
+  player.weapon = 2;
+  player.abilityUsed = false;
+  player.shield = 0;
+  player.shotCone = 0.12;
+  ads = 0;
+  adjustShotgunCone(1);
+  check(Math.abs(player.shotCone - 0.14) < 1e-9, "scroll did not open the shotgun circle");
+  adjustShotgunCone(-1);
+  check(Math.abs(player.shotCone - 0.12) < 1e-9 && Math.abs(playerShotSpread(WEAPONS[2]) - 0.12) < 1e-9, "scroll did not tighten the shotgun circle");
+  grantShotgunShield();
+  check(player.shield === SHIELD_HP && player.abilityUsed === true, "scoping did not give shotgun shield");
+  player.shield = 25;
+  grantShotgunShield();
+  check(player.shield === 25, "shotgun shield came back");
+  player.health = 50;
+  player.hurtIdle = 0;
+  player.nextRegen = REGEN_DELAY;
+  tickRegen(player, 9);
+  check(player.health === 59 && player.shield === 25, `regen changed shield or health (${player.health}, ${player.shield})`);
+
+  resetCombatExtras(player);
+  resetCombatExtras(bot);
+  player.health = MAX_HEALTH;
+  bot.health = MAX_HEALTH;
+  player.alive = true;
+  bot.alive = true;
+  player.weapon = 1;
+  primaryId = heldPrimary;
+  ads = 0;
+  adsHeld = false;
+  poseShields();
   check(shotgun.pellets * shotgun.damage * falloff(shotgun, 1) >= 100, "shotgun does not one-tap up close");
   check(shotgun.pellets * shotgun.damage * falloff(shotgun, 14) < 30, "shotgun dropoff is too weak");
   check(falloff(sniper, 40) === 1, "sniper damage changes with distance");
@@ -4227,6 +4549,8 @@ function snapshot() {
     yaw: player.yaw,
     pitch: player.pitch,
     health: player.health,
+    shield: player.shield,
+    frontShield: player.frontShield,
     weapon: player.weapon,
     alive: player.alive,
     kills: player.kills,
@@ -4555,7 +4879,7 @@ function refreshLockHint() {
   const lock = document.getElementById("lock");
   if (!lock) return;
   const name = keyLabel;
-  lock.textContent = `Click to play. ${name(binds.forward)}${name(binds.left)}${name(binds.back)}${name(binds.right)} move, ${name(binds.sprint)} sprint, ${name(binds.crouch)} crouch, ${name(binds.leanLeft)} and ${name(binds.leanRight)} lean. Mouse aim, right mouse aims. ${name(binds.primary)} primary, ${name(binds.pistol)} pistol. ${name(binds.reload)} reload. Hold ${name(binds.repair)} to repair. Escape opens the menu.`;
+  lock.textContent = `Click to play. ${name(binds.forward)}${name(binds.left)}${name(binds.back)}${name(binds.right)} move, ${name(binds.sprint)} sprint, ${name(binds.crouch)} crouch, ${name(binds.leanLeft)} and ${name(binds.leanRight)} lean. Mouse aim, right mouse aims. ${name(binds.primary)} primary, ${name(binds.pistol)} pistol. ${name(binds.ability)} ability. ${name(binds.reload)} reload. Hold ${name(binds.repair)} to repair. Escape opens the menu.`;
 }
 
 function saveSettings() {
@@ -5120,6 +5444,7 @@ function onKeyDown(event) {
   if (!playing || paused) return;
   keys[event.code] = true;
   if (event.code === binds.reload) startReload(player);
+  if (event.code === binds.ability) useAbility();
   if (event.code === binds.primary) selectWeapon(1);
   if (event.code === binds.pistol) selectWeapon(2);
   if (event.code === "Digit3") selectWeapon(3);
@@ -5375,11 +5700,17 @@ function boot() {
   });
   window.addEventListener("resize", resize);
   window.addEventListener("contextmenu", (event) => event.preventDefault());
+  window.addEventListener("wheel", (event) => {
+    if (!playing || pauseOpen) return;
+    if (WEAPONS[player.weapon] && WEAPONS[player.weapon].id === "shotgun" && ads <= 0.2) event.preventDefault();
+    adjustShotgunCone(event.deltaY);
+  }, { passive: false });
   window.addEventListener("mousedown", (event) => {
     ensureAudio();
     if (!playing || pauseOpen) return;
     if (event.button === 2) {
       adsHeld = true;
+      grantShotgunShield();
       return;
     }
     if (event.button !== 0) return;

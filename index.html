@@ -63,9 +63,13 @@
     display: flex; justify-content: space-between; align-items: flex-end;
   }
   #health-wrap { width: 220px; }
-  #health-label, #ammo { font-size: 14px; margin-bottom: 6px; }
-  #bar { height: 10px; background: #2a3138; }
+  #health-label, #ammo, #shield-label, #ability { font-size: 14px; margin-bottom: 6px; }
+  #shield-label { color: #9ecbff; min-height: 0; }
+  #ability { color: #f0c14a; font-size: 13px; min-height: 16px; }
+  #bar, #shield-bar { height: 10px; background: #2a3138; }
+  #shield-bar { height: 8px; margin-top: 4px; background: #243246; }
   #bar > div { height: 100%; width: 100%; background: #d04545; }
+  #shield-bar > div { height: 100%; width: 0; background: #6aa7ff; }
   #weapon { font-size: 28px; font-weight: 700; }
   #hint { opacity: 0.75; font-size: 13px; margin-top: 4px; }
   #banner {
@@ -233,11 +237,14 @@
   <div id="brand">aQuickFewOnes<span>.com</span></div>
   <div id="top">You 0  —  Opponent 0</div>
   <div id="banner"></div>
-  <div id="lock">Click to play. WASD move, Shift sprint, Ctrl crouch, Q and F lean. Mouse aim, right mouse aims. 1 primary, 2 pistol. R reload. Hold E to repair. Escape opens the menu.</div>
+  <div id="lock">Click to play. WASD move, Shift sprint, Ctrl crouch, Q and F lean. Mouse aim, right mouse aims. 1 primary, 2 pistol. X ability. R reload. Hold E to repair. Escape opens the menu.</div>
   <div id="bottom">
     <div id="health-wrap">
       <div id="health-label">Health 200</div>
       <div id="bar"><div id="fill"></div></div>
+      <div id="shield-label"></div>
+      <div id="shield-bar"><div id="shield-fill"></div></div>
+      <div id="ability"></div>
     </div>
     <div>
       <div id="weapon">SMG</div>
@@ -281,7 +288,7 @@
         <button type="button" data-gun="shotgun">Shotgun</button>
         <button type="button" data-gun="sniper">Sniper</button>
       </div>
-      <p id="gun-note"><span class="gun-hover" data-gun="pistol">Pistol</span> is your secondary. Pick the primary before the round. It stays locked while you fight. 1 and 2 swap in the round.</p>
+      <p id="gun-note"><span class="gun-hover" data-gun="pistol">Pistol</span> is your secondary. Pick the primary before the round. It stays locked while you fight. 1 and 2 swap in the round. Each gun has one ability a round. Health comes back after 5 seconds without damage.</p>
       <button id="play-bot" type="button">Play vs computer</button>
       <button id="host-room" class="ghost" type="button">Start a party</button>
       <button id="show-join" class="ghost" type="button">Join with a code</button>
@@ -320,7 +327,7 @@
     <section class="facts" id="about">
       <article class="fact">
         <b>Shoot the plaster</b>
-        <span>Interior walls break into holes. The house stays large. The yard is smaller, and its walls are brick.</span>
+        <span>Interior walls break into holes. The house stays large. The yard is smaller, and its walls are brick. Each gun has one ability a round, and health creeps back after you stop taking damage.</span>
       </article>
       <article class="fact">
         <b>Fit through the hole</b>
@@ -362,6 +369,6 @@ document.querySelectorAll("[data-jump]").forEach((link) => {
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js" } }
 </script>
-<script type="module" src="./game.js?v=arhip1"></script>
+<script type="module" src="./game.js?v=ability1"></script>
 </body>
 </html>
