@@ -23,6 +23,8 @@ const REGEN_AMOUNT = 3;
 const SHIELD_HP = 100;
 const SHOTGUN_CONE_MIN = 0.04;
 const SHOTGUN_CONE_MAX = 0.28;
+const SHOTGUN_ZOOM_FOV = 46;
+const SHOTGUN_ZOOM_TIME = 5;
 const WALL_HP = 100;
 const SPAWN_LOCK = 1.5;
 const ROUND_WAIT = 3;
@@ -60,7 +62,7 @@ const WEAPONS = [
     id: "shotgun", name: "Shotgun", damage: 7, interval: 0.34, mag: 2,
     reload: 1.7, pellets: 20, spread: 0.12, recoil: 0.02,
     falloffStart: 2.5, falloffEnd: 12, minMult: 0.08,
-    hint: "Scroll changes the hipfire circle. Scoping once a round gives 100 shield. It does not come back.",
+    hint: "X zooms for 5 seconds and gives 100 shield. Range still cuts damage while the zoom lasts. Scroll changes hipfire.",
   },
   {
     id: "sniper", name: "Sniper", damage: 100, interval: 1.2, mag: 1,
@@ -253,6 +255,7 @@ function makeActor(spawnX, spawnZ) {
     frontShield: 0,
     abilityUsed: false,
     damageBuff: 0,
+    shotgunZoom: 0,
     sniperAmp: false,
     hurtIdle: 0,
     nextRegen: REGEN_DELAY,
@@ -287,6 +290,18 @@ function falloff(weapon, distance) {
   if (distance >= weapon.falloffEnd) return weapon.minMult;
   const t = (distance - weapon.falloffStart) / (weapon.falloffEnd - weapon.falloffStart);
   return 1 + (weapon.minMult - 1) * t;
+}
+
+function shotgunZoomFalloff(distance) {
+  if (distance <= 4) return 1;
+  if (distance >= 16) return 0.35;
+  const t = (distance - 4) / (16 - 4);
+  return 1 + (0.35 - 1) * t;
+}
+
+function pelletFalloff(attacker, weapon, distance) {
+  if (attacker === player && weapon.id === "shotgun" && player.shotgunZoom > 0) return shotgunZoomFalloff(distance);
+  return falloff(weapon, distance);
 }
 
 function clamp(value, min, max) {
@@ -1068,11 +1083,13 @@ function poseOpponent() {
 
 function updateAds(dt) {
   const hipOnly = player.frontShield > 0;
-  const want = !hipOnly && adsHeld && playing && player.alive && roundWait <= 0 && !matchOver ? 1 : 0;
+  const shotgunZooming = player.shotgunZoom > 0 && WEAPONS[player.weapon].id === "shotgun";
+  const want = !hipOnly && (adsHeld || shotgunZooming) && playing && player.alive && roundWait <= 0 && !matchOver ? 1 : 0;
   ads += (want - ads) * Math.min(1, dt * 12);
   placeGun();
   const pose = POSES[WEAPONS[player.weapon].id];
-  camera.fov = HIP_FOV + (pose.fov - HIP_FOV) * ads;
+  const zoomFov = shotgunZooming ? SHOTGUN_ZOOM_FOV : pose.fov;
+  camera.fov = HIP_FOV + (zoomFov - HIP_FOV) * ads;
   camera.updateProjectionMatrix();
   const scoped = WEAPONS[player.weapon].id === "sniper" && ads > 0.8;
   const scope = document.getElementById("scope");
@@ -2488,6 +2505,7 @@ function resetCombatExtras(actor) {
   actor.frontShield = 0;
   actor.abilityUsed = false;
   actor.damageBuff = 0;
+  actor.shotgunZoom = 0;
   actor.sniperAmp = false;
   actor.hurtIdle = 0;
   actor.nextRegen = REGEN_DELAY;
@@ -2563,15 +2581,11 @@ function useAbility() {
   } else if (weapon.id === "sniper") {
     player.abilityUsed = true;
     player.sniperAmp = true;
+  } else if (weapon.id === "shotgun") {
+    player.abilityUsed = true;
+    player.shield = SHIELD_HP;
+    player.shotgunZoom = SHOTGUN_ZOOM_TIME;
   }
-}
-
-function grantShotgunShield() {
-  if (!roundIsLive() || !player.alive || player.abilityUsed) return;
-  const weapon = WEAPONS[player.weapon];
-  if (!weapon || weapon.id !== "shotgun") return;
-  player.abilityUsed = true;
-  player.shield = SHIELD_HP;
 }
 
 function adjustShotgunCone(direction) {
@@ -2690,7 +2704,7 @@ function fireShot(attacker) {
     const end = origin.clone().addScaledVector(shot, hit ? hit.t : 40);
     addTracer(origin, end, weapon.id === "shotgun" ? 0xf0c14a : 0xffe7a3);
     if (!hit) continue;
-    const amount = weapon.damage * falloff(weapon, hit.t) * (hit.head ? headMult(weapon) : 1) * damageMult;
+    const amount = weapon.damage * pelletFalloff(attacker, weapon, hit.t) * (hit.head ? headMult(weapon) : 1) * damageMult;
     if (hit.actor) {
       hitActor = hit.actor;
       actorDamage += amount;
@@ -3142,6 +3156,7 @@ function update(dt) {
     if (roundWait <= 0) beginRound();
   } else {
     if (player.damageBuff > 0) player.damageBuff = Math.max(0, player.damageBuff - dt);
+    if (player.shotgunZoom > 0) player.shotgunZoom = Math.max(0, player.shotgunZoom - dt);
     tickRegen(player, dt);
     if (mode !== "net") tickRegen(bot, dt);
     updatePlayer(dt);
@@ -3205,13 +3220,14 @@ function abilityLine() {
   const parts = [];
   const gun = WEAPONS[player.weapon] ? WEAPONS[player.weapon].id : "";
   if (player.damageBuff > 0) parts.push(`2x damage ${player.damageBuff.toFixed(1)}s`);
+  if (player.shotgunZoom > 0) parts.push(`Zoom ${player.shotgunZoom.toFixed(1)}s`);
   if (player.sniperAmp) parts.push("Next shot 3x");
   if (!player.abilityUsed && roundIsLive()) {
     const key = keyLabel(binds.ability);
     if (gun === "smg") parts.push(`${key} raises a front shield`);
     else if (gun === "ar") parts.push(`${key} doubles damage for 5s`);
     else if (gun === "sniper") parts.push(`${key} loads a triple shot`);
-    else if (gun === "shotgun") parts.push("Scope for 100 shield. Scroll changes hipfire");
+    else if (gun === "shotgun") parts.push(`${key} zooms for 5s and gives shield`);
   }
   return parts.join("  ·  ");
 }
@@ -3701,11 +3717,20 @@ function runSelfTest() {
   check(Math.abs(player.shotCone - 0.14) < 1e-9, "scroll did not open the shotgun circle");
   adjustShotgunCone(-1);
   check(Math.abs(player.shotCone - 0.12) < 1e-9 && Math.abs(playerShotSpread(WEAPONS[2]) - 0.12) < 1e-9, "scroll did not tighten the shotgun circle");
-  grantShotgunShield();
-  check(player.shield === SHIELD_HP && player.abilityUsed === true, "scoping did not give shotgun shield");
+  player.shotgunZoom = 0;
+  useAbility();
+  check(player.shield === SHIELD_HP && player.shotgunZoom === SHOTGUN_ZOOM_TIME && player.abilityUsed === true, "shotgun ability did not zoom and shield");
+  ads = 0;
+  adsHeld = false;
+  updateAds(1);
+  check(ads > 0.95 && Math.abs(camera.fov - SHOTGUN_ZOOM_FOV) < 0.05, `shotgun zoom is ${camera.fov.toFixed(1)}`);
+  const zoomFar = pelletFalloff(player, WEAPONS[2], 14);
+  check(pelletFalloff(player, WEAPONS[2], 1) === 1 && zoomFar < 0.7 && zoomFar > falloff(WEAPONS[2], 14), "zoom range reduction is wrong");
+  player.shotgunZoom = 0;
+  check(pelletFalloff(player, WEAPONS[2], 14) === falloff(WEAPONS[2], 14), "range reduction stayed after the zoom");
   player.shield = 25;
-  grantShotgunShield();
-  check(player.shield === 25, "shotgun shield came back");
+  useAbility();
+  check(player.shield === 25 && player.shotgunZoom === 0, "shotgun ability came back");
   player.health = 50;
   player.hurtIdle = 0;
   player.nextRegen = REGEN_DELAY;
@@ -5710,7 +5735,6 @@ function boot() {
     if (!playing || pauseOpen) return;
     if (event.button === 2) {
       adsHeld = true;
-      grantShotgunShield();
       return;
     }
     if (event.button !== 0) return;
