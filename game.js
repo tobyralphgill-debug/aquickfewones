@@ -69,7 +69,7 @@ const WEAPONS = [
     id: "sniper", name: "Sniper", damage: 100, interval: 1.2, mag: 1,
     reload: 1.35, pellets: 1, spread: 0.18, recoil: 0.03,
     falloffStart: 1000, falloffEnd: 1001, minMult: 1,
-    hint: "Scope is accurate. Hipfire is very wide. X puts 2 shots in the mag for 7.5 seconds.",
+    hint: "Scope is accurate. Hipfire is very wide. X puts 2 shots in the mag for 7.5 seconds. Click again for the next shot right away.",
   },
   {
     id: "pistol", name: "Pistol", damage: 22, interval: 0.28, mag: 12,
@@ -214,6 +214,7 @@ let difficulty = "medium";
 let paused = false;
 let pauseOpen = false;
 let mouseDown = false;
+let sniperHeldShot = false;
 let botGoal = null;
 let botRetarget = 0;
 let botSee = 0;
@@ -2629,6 +2630,21 @@ function poseShields() {
   }
 }
 
+function shotCooldown(attacker, weapon) {
+  if (attacker === player && weapon.id === "sniper" && player.sniperDouble > 0) return 0;
+  return weapon.interval;
+}
+
+function sniperClickHeld() {
+  const weapon = WEAPONS[player.weapon];
+  return Boolean(weapon && weapon.id === "sniper" && sniperHeldShot);
+}
+
+function markSniperClick() {
+  const weapon = WEAPONS[player.weapon];
+  if (weapon && weapon.id === "sniper") sniperHeldShot = true;
+}
+
 function fireShot(attacker) {
   const weapon = WEAPONS[attacker.weapon];
   if (!playing || paused || !attacker.alive || matchOver || roundWait > 0) return false;
@@ -2639,7 +2655,7 @@ function fireShot(attacker) {
   }
 
   attacker.ammo[weapon.id] -= 1;
-  attacker.cooldown = weapon.interval;
+  attacker.cooldown = shotCooldown(attacker, weapon);
   attacker.spawnLock = 0;
   if (attacker === player) {
     repair = 0;
@@ -3721,6 +3737,11 @@ function runSelfTest() {
   player.reloadId = "sniper";
   useAbility();
   check(player.sniperDouble === SNIPER_DOUBLE_TIME && player.ammo.sniper === 2 && player.reload === 0 && magSize(player, WEAPONS[3]) === 2, "sniper ability did not load 2 shots");
+  check(shotCooldown(player, WEAPONS[3]) === 0, "sniper follow-up still waits");
+  sniperHeldShot = true;
+  check(sniperClickHeld() === true, "sniper fired again on the same click");
+  sniperHeldShot = false;
+  check(sniperClickHeld() === false, "a new sniper click could not fire");
   player.ammo.sniper = 0;
   player.reload = 0.01;
   player.reloadId = "sniper";
@@ -3730,6 +3751,7 @@ function runSelfTest() {
   player.sniperDouble = 0.4;
   tickSniperDouble(1);
   check(player.sniperDouble === 0 && player.ammo.sniper === 1 && magSize(player, WEAPONS[3]) === 1, "extra sniper shot stayed after 7.5 seconds");
+  check(shotCooldown(player, WEAPONS[3]) === WEAPONS[3].interval, "sniper bolt time changed");
 
   player.weapon = 2;
   player.abilityUsed = false;
@@ -5187,6 +5209,7 @@ function setPause(open) {
   if (open) {
     adsHeld = false;
     mouseDown = false;
+    sniperHeldShot = false;
     if (document.exitPointerLock) document.exitPointerLock();
   }
   const lock = document.getElementById("lock");
@@ -5216,6 +5239,7 @@ function leaveToMenu() {
   netEvents.length = 0;
   adsHeld = false;
   mouseDown = false;
+  sniperHeldShot = false;
   mySeat = 0;
   loadMap("house");
   resetMatch();
@@ -5747,6 +5771,7 @@ function boot() {
     clearKeys();
     adsHeld = false;
     mouseDown = false;
+    sniperHeldShot = false;
   });
   window.addEventListener("resize", resize);
   window.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -5764,14 +5789,18 @@ function boot() {
     }
     if (event.button !== 0) return;
     mouseDown = true;
+    sniperHeldShot = false;
     if (document.pointerLockElement !== document.body) {
       document.body.requestPointerLock();
       return;
     }
-    fireShot(player);
+    if (fireShot(player)) markSniperClick();
   });
   window.addEventListener("mouseup", (event) => {
-    if (event.button === 0) mouseDown = false;
+    if (event.button === 0) {
+      mouseDown = false;
+      sniperHeldShot = false;
+    }
     if (event.button === 2) adsHeld = false;
   });
   document.addEventListener("pointerlockchange", () => {
@@ -5801,7 +5830,9 @@ function boot() {
       syncing = true;
       syncNet().finally(() => { syncing = false; });
     }
-    if (mouseDown && playing && !paused && !pauseOpen && document.pointerLockElement === document.body) fireShot(player);
+    if (mouseDown && playing && !paused && !pauseOpen && document.pointerLockElement === document.body && !sniperClickHeld()) {
+      if (fireShot(player)) markSniperClick();
+    }
     update(dt);
     if (renderer) renderer.render(scene, camera);
     requestAnimationFrame(frame);
