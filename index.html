@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aQuickFewOnes.com</title>
-<meta name="description" content="aQuickFewOnes.com is a browser 1v1. Pick a gun, shoot holes in the house, and race to five.">
+<meta name="description" content="aQuickFewOnes.com is a browser shooter for up to four players. Pick a gun, choose a map, and race to five.">
 <meta name="theme-color" content="#12161b">
 <meta property="og:title" content="aQuickFewOnes.com">
 <meta property="og:description" content="A quick few ones. First to five in a house you can shoot through.">
@@ -181,7 +181,17 @@
     background: #2a333c; color: #f2f4f6;
   }
   #menu #gun-note { margin: 12px 0 0; }
-  #menu #diffs button.on, #menu #guns button.on { background: #f0c14a; color: #1a1408; }
+  #menu #diffs button.on, #menu #guns button.on, #menu #maps button.on { background: #f0c14a; color: #1a1408; }
+  #map-label { color: #b7c0ca; font-size: 13px; margin: 12px 0 8px; }
+  #party-line { color: #f2f4f6; font-weight: 700; margin-top: 8px; }
+  #map-note { color: #b7c0ca; font-size: 13px; margin: 8px 0 0; }
+  #menu #maps { display: flex; gap: 8px; }
+  #menu #maps button {
+    flex: 1 1 0; width: auto; min-width: 0; margin-top: 0; padding: 10px 4px;
+    background: #2a333c; color: #f2f4f6;
+  }
+  #menu #maps button:disabled { opacity: 0.7; }
+  #start-party[disabled] { opacity: 0.45; cursor: default; }
   #controls { max-height: 62vh; overflow: auto; }
   .bind-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
   #menu .bind-row span { color: #d5dde6; font-size: 14px; }
@@ -249,9 +259,9 @@
   <main class="site-wrap" id="top-of-site">
     <section class="hero">
       <div>
-        <p class="eyebrow">Browser 1v1</p>
+        <p class="eyebrow">Browser shooter</p>
         <h1>A quick few ones.</h1>
-        <p class="lede">Pick a gun, shoot the house open, and race to five. The bot is ready. A friend on any Wi-Fi can join with a code.</p>
+        <p class="lede">Pick a gun, shoot the walls open, and race to five. A party of up to four can join from any Wi-Fi. The host picks the map. Against the bot, the map is a surprise.</p>
       </div>
       <div class="card" id="play">
     <p class="card-kicker">Play</p>
@@ -273,7 +283,7 @@
       </div>
       <p id="gun-note"><span class="gun-hover" data-gun="pistol">Pistol</span> is your secondary. Pick the primary before the round. It stays locked while you fight. 1 and 2 swap in the round.</p>
       <button id="play-bot" type="button">Play vs computer</button>
-      <button id="host-room" class="ghost" type="button">Invite a friend</button>
+      <button id="host-room" class="ghost" type="button">Start a party</button>
       <button id="show-join" class="ghost" type="button">Join with a code</button>
       <button id="show-controls" class="ghost" type="button">Controls</button>
     </div>
@@ -287,8 +297,16 @@
     <div id="lobby" hidden>
       <div id="code"></div>
       <div id="link"></div>
+      <div id="party-line">Party 1/4</div>
+      <div id="map-label">Map</div>
+      <div id="maps">
+        <button type="button" data-map="house" class="on">House</button>
+        <button type="button" data-map="yard">Yard</button>
+      </div>
+      <p id="map-note">The host picks the map. Against a bot, the map is random.</p>
+      <button id="start-party" type="button" disabled>Start match</button>
       <button id="copy" type="button">Copy invite link</button>
-      <div id="wait">Waiting for your friend. Send the code or the link. Different Wi-Fi works.</div>
+      <div id="wait">Waiting for your party. Up to 4 players. Different Wi-Fi works.</div>
       <button id="lobby-back" class="ghost" type="button">Back</button>
     </div>
     <div id="join-box" hidden>
@@ -302,7 +320,7 @@
     <section class="facts" id="about">
       <article class="fact">
         <b>Shoot the plaster</b>
-        <span>Interior walls break into holes. The outer box of the house stays up.</span>
+        <span>Interior walls break into holes. The house is bigger, and the yard is a second map.</span>
       </article>
       <article class="fact">
         <b>Fit through the hole</b>
@@ -344,6 +362,6 @@ document.querySelectorAll("[data-jump]").forEach((link) => {
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js" } }
 </script>
-<script type="module" src="./game.js?v=net1"></script>
+<script type="module" src="./game.js?v=party1"></script>
 </body>
 </html>

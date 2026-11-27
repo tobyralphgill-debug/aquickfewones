@@ -24,16 +24,18 @@ const REPAIR_TIME = 1.25;
 const REPAIR_REACH = 2.3;
 const HIP_FOV = 72;
 
-const X0 = -22;
-const X1 = 22;
-const Z0 = -16;
-const Z1 = 16;
+let X0 = -32;
+let X1 = 32;
+let Z0 = -24;
+let Z1 = 24;
 const HEIGHT = 4.5;
 const THICK = 0.45;
 const PIECE = 0.45;
 const THIN = 0.07;
 const SPAWN_A = [-18, 12];
 const SPAWN_B = [18, -12];
+const HOUSE_SPOTS = [[-18, 12], [18, -12], [-26, 20], [26, -20]];
+const YARD_SPOTS = [[-22, 22], [22, -22], [-22, -22], [22, 22]];
 
 const WEAPONS = [
   {
@@ -164,10 +166,19 @@ let shotBuffer = null;
 let boomBuffer = null;
 let lastSound = null;
 const boxes = [];
+const trimMeshes = [];
 const tracers = [];
 const netEvents = [];
 const seenEvents = new Set();
 let nextId = 1;
+let mapId = "house";
+let mySeat = 0;
+let hosting = false;
+let welcomed = false;
+let lanReady = false;
+let partyMap = "house";
+let partySize = 1;
+let partyRoster = [0];
 let renderer = null;
 let freezeBot = false;
 let matchOver = false;
@@ -238,6 +249,14 @@ function makeActor(spawnX, spawnZ) {
 
 const player = makeActor(SPAWN_A[0], SPAWN_A[1]);
 const bot = makeActor(SPAWN_B[0], SPAWN_B[1]);
+const mateA = makeActor(26, -20);
+const mateB = makeActor(-26, 20);
+player.seat = 0;
+bot.seat = 1;
+mateA.seat = -1;
+mateB.seat = -1;
+mateA.alive = false;
+mateB.alive = false;
 player.yaw = Math.atan2(-(bot.spawnX - player.spawnX), -(bot.spawnZ - player.spawnZ));
 
 function freshAmmo() {
@@ -257,13 +276,56 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function spawnsForMap() {
+  return mapId === "yard" ? YARD_SPOTS : HOUSE_SPOTS;
+}
+
 function setSeat(index) {
-  const mine = index === 0 ? SPAWN_A : SPAWN_B;
-  const theirs = index === 0 ? SPAWN_B : SPAWN_A;
+  mySeat = index === 1 || index === 2 || index === 3 ? index : 0;
+  placeSeats();
+}
+
+function placeSeats() {
+  const spots = spawnsForMap();
+  const mine = spots[mySeat] || spots[0];
+  player.seat = mySeat;
   player.spawnX = mine[0];
   player.spawnZ = mine[1];
-  bot.spawnX = theirs[0];
-  bot.spawnZ = theirs[1];
+  if (mode !== "net") {
+    bot.seat = 1;
+    bot.spawnX = spots[1][0];
+    bot.spawnZ = spots[1][1];
+    mateA.seat = -1;
+    mateB.seat = -1;
+    mateA.alive = false;
+    mateB.alive = false;
+    mateA.present = false;
+    mateB.present = false;
+    return;
+  }
+  const others = [0, 1, 2, 3].filter((seat) => seat !== mySeat);
+  [bot, mateA, mateB].forEach((actor, index) => {
+    const seat = others[index];
+    const spot = spots[seat];
+    actor.seat = seat;
+    actor.spawnX = spot[0];
+    actor.spawnZ = spot[1];
+  });
+}
+
+function actorForSeat(seat) {
+  if (seat === mySeat) return player;
+  return [bot, mateA, mateB].find((actor) => actor.seat === seat) || null;
+}
+
+function activeFighters() {
+  const list = [player];
+  for (const actor of [bot, mateA, mateB]) {
+    if (actor.seat < 0) continue;
+    if (mode === "net" && !actor.present) continue;
+    list.push(actor);
+  }
+  return list;
 }
 
 const _uvPoint = new THREE.Vector3();
@@ -422,6 +484,7 @@ function addTrimMesh(minX, minY, minZ, maxX, maxY, maxZ, material) {
   );
   mesh.position.set((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
   scene.add(mesh);
+  trimMeshes.push(mesh);
 }
 
 // Baseboards and crown are visual only. They are not added to `boxes`.
@@ -465,8 +528,8 @@ function addShellTrim() {
   addTrimMesh(X0 + THICK, HEIGHT - 0.08, innerNorth - proud, X1 - THICK, HEIGHT, innerNorth, crownMat);
 }
 
-function buildOuterCuboid() {
-  addBox(X0, -THICK, Z0, X1, 0, Z1, 0xffffff, false, floorMat, null);
+function buildOuterCuboid(ground) {
+  addBox(X0, -THICK, Z0, X1, 0, Z1, 0xffffff, false, ground || floorMat, null);
   addBox(X0, HEIGHT, Z0, X1, HEIGHT + THICK, Z1, 0xf4f1ea, false, ceilingMat, null);
   addBox(X0, 0, Z0, X0 + THICK, HEIGHT, Z1, 0xe7e1d6, false, drywallMat, "x");
   addBox(X1 - THICK, 0, Z0, X1, HEIGHT, Z1, 0xe7e1d6, false, drywallMat, "x");
@@ -492,14 +555,96 @@ function buildInnerWalls() {
   addSectionWall("z", -12, -5.4, 5.4, HEIGHT);
   addSectionWall("z", 5, -12, -7.4, 2.7);
   addSectionWall("z", -5, 7.4, 12, 2.7);
-  indexWalls();
 }
 
-function buildBotMesh() {
+function buildHouseWings() {
+  addSectionWall("x", 22, -16, -4, HEIGHT);
+  addSectionWall("x", 22, 4, 16, HEIGHT);
+  addSectionWall("x", -22, -16, -4, HEIGHT);
+  addSectionWall("x", -22, 4, 16, HEIGHT);
+  addSectionWall("z", 18, -30, -24, HEIGHT);
+  addSectionWall("z", 18, -8, 5.4, HEIGHT);
+  addSectionWall("z", 18, 6.6, 14, HEIGHT);
+  addSectionWall("z", 18, 24, 30, HEIGHT);
+  addSectionWall("z", -18, -30, -24, HEIGHT);
+  addSectionWall("z", -18, -8, 5.4, HEIGHT);
+  addSectionWall("z", -18, 6.6, 14, HEIGHT);
+  addSectionWall("z", -18, 24, 30, HEIGHT);
+}
+
+function buildYardWalls() {
+  const low = 2.25;
+  addSectionWall("x", -6, -10, -2, low);
+  addSectionWall("x", 6, 2, 10, low);
+  addSectionWall("z", -6, 2, 12, low);
+  addSectionWall("z", 6, -12, -2, low);
+  addSectionWall("x", 16, 14, 20, HEIGHT);
+  addSectionWall("x", -16, -20, -14, HEIGHT);
+  addSectionWall("z", 16, -20, -14, HEIGHT);
+  addSectionWall("z", -16, 14, 20, HEIGHT);
+}
+
+function clearMap() {
+  for (const box of boxes) {
+    clearHoleRings(box);
+    if (box.holeMat) box.holeMat.dispose();
+    if (box.mesh) {
+      scene.remove(box.mesh);
+      if (box.mesh.geometry) box.mesh.geometry.dispose();
+    }
+  }
+  for (const mesh of trimMeshes) {
+    scene.remove(mesh);
+    if (mesh.geometry) mesh.geometry.dispose();
+  }
+  trimMeshes.length = 0;
+  boxes.length = 0;
+  wallPanels.clear();
+  holeCache.clear();
+  holeCacheGen = -1;
+  nextId = 1;
+}
+
+let yardFloorMat = null;
+
+function loadMap(id) {
+  mapId = id === "yard" ? "yard" : "house";
+  clearMap();
+  if (mapId === "yard") {
+    X0 = -28;
+    X1 = 28;
+    Z0 = -28;
+    Z1 = 28;
+    if (!yardFloorMat) {
+      yardFloorMat = floorMat.clone();
+      yardFloorMat.color.setHex(0xb7c4a4);
+    }
+    buildOuterCuboid(yardFloorMat);
+    buildYardWalls();
+  } else {
+    X0 = -32;
+    X1 = 32;
+    Z0 = -24;
+    Z1 = 24;
+    buildOuterCuboid(floorMat);
+    buildInnerWalls();
+    buildHouseWings();
+  }
+  if (floorMat.map) floorMat.map.repeat.set((X1 - X0) / 3, (Z1 - Z0) / 3);
+  indexWalls();
+  placeSeats();
+}
+
+function chooseMap(kind, picked) {
+  if (kind === "bot") return Math.random() < 0.5 ? "house" : "yard";
+  return picked === "yard" ? "yard" : "house";
+}
+
+function buildFighterMesh(actor, tint) {
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
-  const flesh = new THREE.MeshLambertMaterial({ color: 0xe08b6a });
+  const flesh = new THREE.MeshLambertMaterial({ color: tint });
   const bellyMat = new THREE.MeshLambertMaterial({ color: 0xf3c7ad });
   const eyeWhite = new THREE.MeshLambertMaterial({ color: 0xf6f3ee });
   const pupil = new THREE.MeshLambertMaterial({ color: 0x1c1a18 });
@@ -531,31 +676,38 @@ function buildBotMesh() {
   const held = new THREE.Group();
   held.name = "held-gun";
   aim.add(held);
-  group.position.set(bot.x, 0, bot.z);
+  group.position.set(actor.x, 0, actor.z);
   scene.add(group);
-  bot.mesh = group;
-  bot.body = body;
-  bot.aim = aim;
-  bot.gun = held;
-  bot.visor = visor;
-  bot.rig = null;
-  showBotGun();
+  actor.mesh = group;
+  actor.body = body;
+  actor.aim = aim;
+  actor.gun = held;
+  actor.visor = visor;
+  actor.rig = null;
+  showActorGun(actor);
+  group.visible = actor.seat >= 0 && actor.alive;
+}
+
+function buildBotMesh() {
+  buildFighterMesh(bot, 0xe08b6a);
+  buildFighterMesh(mateA, 0x6a8de0);
+  buildFighterMesh(mateB, 0x6ad18a);
 }
 
 const _blobFwd = new THREE.Vector3();
 const _blobRight = new THREE.Vector3();
 
-function poseBlob(distance, blend, vx, vz) {
-  const body = bot.body;
-  if (!body || !bot.mesh) return;
+function poseActorBlob(actor, distance, blend, vx, vz) {
+  const body = actor.body;
+  if (!body || !actor.mesh) return;
   const wobble = Math.sin((distance / STRIDE) * Math.PI * 2) * (blend || 0);
   let sx = 1 - wobble * 0.05;
   let sy = 1 - Math.abs(wobble) * 0.04;
   const szBase = 1 + wobble * 0.08;
-  const useVx = vx === undefined ? bot.vx : vx;
-  const useVz = vz === undefined ? bot.vz : vz;
-  bot.mesh.updateMatrixWorld(true);
-  _blobFwd.set(0, 0, -1).applyQuaternion(bot.mesh.quaternion);
+  const useVx = vx === undefined ? actor.vx : vx;
+  const useVz = vz === undefined ? actor.vz : vz;
+  actor.mesh.updateMatrixWorld(true);
+  _blobFwd.set(0, 0, -1).applyQuaternion(actor.mesh.quaternion);
   _blobFwd.y = 0;
   if (_blobFwd.lengthSq() < 1e-8) _blobFwd.set(0, 0, -1);
   else _blobFwd.normalize();
@@ -565,29 +717,37 @@ function poseBlob(distance, blend, vx, vz) {
   const sz = szBase + along * 0.12;
   sx += Math.abs(side) * 0.08 - Math.abs(along) * 0.02;
   sy -= Math.abs(along) * 0.03;
-  sy *= 1 - (bot.crouch || 0) * 0.28;
+  sy *= 1 - (actor.crouch || 0) * 0.28;
   body.scale.set(sx, sy, sz);
 }
 
-function updateWalk(dt) {
-  if (!bot.body) return;
-  const prevX = bot.walkX;
-  const prevZ = bot.walkZ;
-  const moved = Math.hypot(bot.x - prevX, bot.z - prevZ);
-  bot.walkX = bot.x;
-  bot.walkZ = bot.z;
+function poseBlob(distance, blend, vx, vz) {
+  poseActorBlob(bot, distance, blend, vx, vz);
+}
+
+function walkActor(actor, dt, local) {
+  if (!actor.body) return;
+  const prevX = actor.walkX;
+  const prevZ = actor.walkZ;
+  const moved = Math.hypot(actor.x - prevX, actor.z - prevZ);
+  actor.walkX = actor.x;
+  actor.walkZ = actor.z;
   const stepped = moved > 0.004 && moved < 1.25;
-  if (stepped) bot.walkDistance += moved;
+  if (stepped) actor.walkDistance += moved;
   const want = stepped ? 1 : 0;
-  bot.walkBlend += (want - bot.walkBlend) * Math.min(1, (dt || 0) * (stepped ? 14 : 8));
-  let vx = bot.vx;
-  let vz = bot.vz;
+  actor.walkBlend += (want - actor.walkBlend) * Math.min(1, (dt || 0) * (stepped ? 14 : 8));
+  let vx = actor.vx;
+  let vz = actor.vz;
   if (stepped && dt > 0 && Math.hypot(vx, vz) < 0.05) {
-    vx = (bot.x - prevX) / dt;
-    vz = (bot.z - prevZ) / dt;
+    vx = (actor.x - prevX) / dt;
+    vz = (actor.z - prevZ) / dt;
   }
-  poseBlob(bot.walkDistance, bot.walkBlend, vx, vz);
-  updateSteps(bot, dt, false);
+  poseActorBlob(actor, actor.walkDistance, actor.walkBlend, vx, vz);
+  updateSteps(actor, dt, local);
+}
+
+function updateWalk(dt) {
+  walkActor(bot, dt, false);
 }
 
 function buildLights() {
@@ -803,29 +963,56 @@ const HOLD = {
   pistol: [0.38, 0.92, -0.46],
 };
 
+function showActorGun(actor) {
+  if (!actor || !actor.gun) return;
+  const weapon = WEAPONS[actor.weapon] || WEAPONS[0];
+  if (actor.gun.userData.id === weapon.id && actor.gun.children.length) return;
+  clearGun(actor.gun);
+  fillGun(actor.gun, weapon.id);
+  actor.gun.userData.id = weapon.id;
+}
+
 function showBotGun() {
-  if (!bot.gun) return;
-  const weapon = WEAPONS[bot.weapon] || WEAPONS[0];
-  if (bot.gun.userData.id === weapon.id && bot.gun.children.length) return;
-  clearGun(bot.gun);
-  fillGun(bot.gun, weapon.id);
-  bot.gun.userData.id = weapon.id;
+  showActorGun(bot);
+}
+
+function poseActor(actor) {
+  if (!actor || !actor.mesh) return;
+  const show = actor.seat >= 0 && actor.alive && (mode !== "net" || actor.present);
+  actor.mesh.visible = show;
+  if (!show) return;
+  actor.mesh.position.set(actor.x, 0, actor.z);
+  actor.mesh.rotation.y = actor.yaw;
+  showActorGun(actor);
+  if (actor.aim) {
+    const weapon = WEAPONS[actor.weapon] || WEAPONS[0];
+    const hold = HOLD[weapon.id] || HOLD.ar;
+    const crouchDrop = 1 - (actor.crouch || 0) * 0.28;
+    actor.aim.position.set(hold[0], hold[1] * crouchDrop, hold[2]);
+    actor.aim.rotation.y = 0;
+    actor.aim.rotation.z = 0;
+    actor.aim.rotation.x = actor.pitch || 0;
+  }
+  if (actor.body) actor.body.rotation.x = (actor.pitch || 0) * 0.35;
+  if (actor.lean) {
+    actor.mesh.updateMatrixWorld(true);
+    const leanRight = new THREE.Vector3().setFromMatrixColumn(actor.mesh.matrixWorld, 0);
+    leanRight.y = 0;
+    if (leanRight.lengthSq() > 1e-8) {
+      leanRight.normalize();
+      actor.mesh.position.addScaledVector(leanRight, actor.lean * LEAN_OFFSET);
+    }
+  }
+}
+
+function poseFighters() {
+  poseActor(bot);
+  poseActor(mateA);
+  poseActor(mateB);
 }
 
 function poseOpponent() {
-  if (!bot.mesh) return;
-  bot.mesh.position.set(bot.x, 0, bot.z);
-  bot.mesh.rotation.y = bot.yaw;
-  showBotGun();
-  if (!bot.aim) return;
-  const weapon = WEAPONS[bot.weapon] || WEAPONS[0];
-  const hold = HOLD[weapon.id] || HOLD.ar;
-  const crouchDrop = 1 - (bot.crouch || 0) * 0.28;
-  bot.aim.position.set(hold[0], hold[1] * crouchDrop, hold[2]);
-  bot.aim.rotation.y = 0;
-  bot.aim.rotation.z = 0;
-  bot.aim.rotation.x = bot.pitch || 0;
-  if (bot.body) bot.body.rotation.x = (bot.pitch || 0) * 0.35;
+  poseActor(bot);
 }
 
 function updateAds(dt) {
@@ -1048,7 +1235,7 @@ function trace(ox, oy, oz, dx, dy, dz, ignore) {
     bestT = distance;
     best = { t: distance, box, actor: null };
   }
-  for (const actor of [player, bot]) {
+  for (const actor of activeFighters()) {
     if (!actor.alive || actor === ignore) continue;
     const sy = crouchScale(actor);
     const yaw = actor.yaw || 0;
@@ -1260,8 +1447,15 @@ function beginRound() {
   restoreWalls();
   if (mode === "net") queueEvent({ type: "round" });
   respawn(player);
-  if (mode !== "net") respawn(bot);
-  else bot.alive = true;
+  if (mode !== "net") {
+    respawn(bot);
+    mateA.alive = false;
+    mateB.alive = false;
+  } else {
+    for (const actor of [bot, mateA, mateB]) {
+      if (actor.seat >= 0 && actor.present) actor.alive = true;
+    }
+  }
   roundWait = 0;
   repair = 0;
   repairTarget = null;
@@ -1269,6 +1463,7 @@ function beginRound() {
 
 function queueEvent(event) {
   event.eid = event.eid || Math.random().toString(36).slice(2, 10);
+  seenEvents.add(event.eid);
   netEvents.push(event);
 }
 
@@ -2125,6 +2320,7 @@ function applyEvent(event) {
     return;
   }
   if (event.type === "hurt") {
+    if (typeof event.target === "number" && event.target !== mySeat) return;
     if (!player.alive || player.spawnLock > 0 || matchOver || roundWait > 0) return;
     const before = player.health;
     player.health -= event.amount;
@@ -2132,41 +2328,73 @@ function applyEvent(event) {
     if (player.health <= 0) {
       player.alive = false;
       player.health = 0;
-      queueEvent({ type: "died" });
+      const died = { type: "died" };
+      if (typeof event.target === "number") {
+        died.seat = mySeat;
+        if (typeof event.killer === "number") died.killer = event.killer;
+      }
+      queueEvent(died);
       startCountdown();
     }
     return;
   }
   if (event.type === "died") {
-    bot.alive = false;
-    bot.health = 0;
-    if (matchOver || roundWait > 0) return;
-    player.kills += 1;
-    if (mode === "net") showHitMarker(true);
-    if (player.kills >= WIN_SCORE) {
-      matchOver = true;
-      resetIn = 4;
-      banner = "You win";
+    if (typeof event.seat !== "number") {
+      bot.alive = false;
+      bot.health = 0;
+      if (matchOver || roundWait > 0) return;
+      player.kills += 1;
+      if (mode === "net") showHitMarker(true);
+      if (player.kills >= WIN_SCORE) {
+        matchOver = true;
+        resetIn = 4;
+        banner = "You win";
+        return;
+      }
+      startCountdown();
       return;
+    }
+    const victim = actorForSeat(event.seat);
+    if (victim && victim !== player) {
+      victim.alive = false;
+      victim.health = 0;
+    }
+    if (event.seat === mySeat) {
+      player.alive = false;
+      player.health = 0;
+    }
+    if (matchOver || roundWait > 0) return;
+    if (event.killer === mySeat) {
+      player.kills += 1;
+      if (mode === "net") showHitMarker(true);
+      if (player.kills >= WIN_SCORE) {
+        matchOver = true;
+        resetIn = 4;
+        banner = "You win";
+        return;
+      }
     }
     startCountdown();
   }
 }
 
-function applyRemote(state) {
+function applyRemote(state, seat) {
   if (!state) return;
-  bot.x = state.x;
-  bot.z = state.z;
-  bot.yaw = state.yaw || 0;
-  if (typeof state.pitch === "number") bot.pitch = state.pitch;
-  bot.health = state.health;
-  bot.weapon = state.weapon || 0;
-  bot.alive = Boolean(state.alive);
-  bot.kills = state.kills || 0;
-  bot.spawnLock = state.spawnLock || 0;
-  if (typeof state.crouch === "number") bot.crouch = clamp(state.crouch, 0, 1);
-  if (typeof state.lean === "number") bot.lean = clamp(state.lean, -1, 1);
-  if (state.gait === "sprint" || state.gait === "crouch" || state.gait === "walk") bot.gait = state.gait;
+  const actor = typeof seat === "number" ? actorForSeat(seat) : bot;
+  if (!actor || actor === player) return;
+  actor.present = true;
+  actor.x = state.x;
+  actor.z = state.z;
+  actor.yaw = state.yaw || 0;
+  if (typeof state.pitch === "number") actor.pitch = state.pitch;
+  actor.health = state.health;
+  actor.weapon = state.weapon || 0;
+  actor.alive = Boolean(state.alive);
+  actor.kills = state.kills || 0;
+  actor.spawnLock = state.spawnLock || 0;
+  if (typeof state.crouch === "number") actor.crouch = clamp(state.crouch, 0, 1);
+  if (typeof state.lean === "number") actor.lean = clamp(state.lean, -1, 1);
+  if (state.gait === "sprint" || state.gait === "crouch" || state.gait === "walk") actor.gait = state.gait;
   if (state.kills >= WIN_SCORE && player.kills < WIN_SCORE && !matchOver) {
     matchOver = true;
     resetIn = 4;
@@ -2269,8 +2497,8 @@ function fireShot(attacker) {
 
   if (hitActor && actorDamage > 0) {
     if (mode === "net") {
-      if (hitActor !== player) {
-        queueEvent({ type: "hurt", amount: actorDamage });
+      if (hitActor !== player && hitActor.seat >= 0) {
+        queueEvent({ type: "hurt", amount: actorDamage, target: hitActor.seat, killer: mySeat });
         if (attacker === player) showHitMarker(false, hitHead);
       }
     } else if (hitActor.spawnLock <= 0) {
@@ -2496,8 +2724,9 @@ function pushActor(actor) {
   }
   actor.x = clamp(actor.x, X0 + THICK + BODY_RADIUS, X1 - THICK - BODY_RADIUS);
   actor.z = clamp(actor.z, Z0 + THICK + BODY_RADIUS, Z1 - THICK - BODY_RADIUS);
-  const other = actor === player ? bot : player;
-  if (other.alive && actor.alive) {
+  if (!actor.alive) return;
+  for (const other of activeFighters()) {
+    if (other === actor || !other.alive) continue;
     const dx = actor.x - other.x;
     const dz = actor.z - other.z;
     const distance = Math.hypot(dx, dz);
@@ -2666,6 +2895,8 @@ function update(dt) {
     syncCamera();
     placeGun();
     poseOpponent();
+    if (mateA.mesh) mateA.mesh.visible = false;
+    if (mateB.mesh) mateB.mesh.visible = false;
     damageFlash = Math.max(0, damageFlash - dt);
     hitMarker = Math.max(0, hitMarker - dt);
     paintHud();
@@ -2680,6 +2911,8 @@ function update(dt) {
 
   tickActor(player, dt);
   tickActor(bot, dt);
+  if (mateA.seat >= 0) tickActor(mateA, dt);
+  if (mateB.seat >= 0) tickActor(mateB, dt);
   if (matchOver) {
     resetIn -= dt;
     if (resetIn <= 0) resetMatch();
@@ -2693,20 +2926,10 @@ function update(dt) {
   }
   updateAds(dt);
   syncCamera();
-  if (bot.mesh) {
-    poseOpponent();
-    if (bot.lean) {
-      bot.mesh.updateMatrixWorld(true);
-      const leanRight = new THREE.Vector3().setFromMatrixColumn(bot.mesh.matrixWorld, 0);
-      leanRight.y = 0;
-      if (leanRight.lengthSq() > 1e-8) {
-        leanRight.normalize();
-        bot.mesh.position.addScaledVector(leanRight, bot.lean * LEAN_OFFSET);
-      }
-    }
-    updateWalk(dt);
-    bot.mesh.visible = bot.alive;
-  }
+  poseFighters();
+  walkActor(bot, dt, false);
+  if (mateA.seat >= 0) walkActor(mateA, dt, false);
+  if (mateB.seat >= 0) walkActor(mateB, dt, false);
   updateListener();
   for (let i = tracers.length - 1; i >= 0; i -= 1) {
     tracers[i].life -= dt;
@@ -2730,11 +2953,24 @@ function resetMatch() {
   banner = "";
   player.kills = 0;
   bot.kills = 0;
+  mateA.kills = 0;
+  mateB.kills = 0;
   repair = 0;
   repairTarget = null;
   restoreWalls();
   respawn(player);
-  if (mode !== "net") respawn(bot);
+  if (mode !== "net") {
+    respawn(bot);
+    mateA.alive = false;
+    mateB.alive = false;
+  } else {
+    for (const actor of [bot, mateA, mateB]) {
+      if (actor.present && actor.seat >= 0) {
+        actor.alive = true;
+        actor.health = MAX_HEALTH;
+      }
+    }
+  }
   equipPlayer(weaponById(primaryId));
   player.yaw = Math.atan2(-(bot.spawnX - player.spawnX), -(bot.spawnZ - player.spawnZ));
 }
@@ -2759,9 +2995,20 @@ function paintHud() {
   const bannerEl = document.getElementById("banner");
   const flash = document.getElementById("dmg");
   if (!top) return;
-  const botGun = WEAPONS[bot.weapon] ? WEAPONS[bot.weapon].name : "";
-  const foe = mode === "net" ? "Friend" : `${DIFFICULTY[difficulty].label} bot`;
-  top.textContent = `You ${player.kills}  —  ${foe} ${bot.kills} (${botGun})  —  first to ${WIN_SCORE}`;
+  if (mode === "net") {
+    const parts = [`You ${player.kills}`];
+    for (const actor of [bot, mateA, mateB]) {
+      if (actor.seat < 0 || !actor.present) continue;
+      const gunName = WEAPONS[actor.weapon] ? WEAPONS[actor.weapon].name : "";
+      parts.push(`P${actor.seat + 1} ${actor.kills}${gunName ? ` (${gunName})` : ""}`);
+    }
+    parts.push(`first to ${WIN_SCORE}`);
+    top.textContent = parts.join("  —  ");
+  } else {
+    const botGun = WEAPONS[bot.weapon] ? WEAPONS[bot.weapon].name : "";
+    const foe = `${DIFFICULTY[difficulty].label} bot`;
+    top.textContent = `You ${player.kills}  —  ${foe} ${bot.kills} (${botGun})  —  first to ${WIN_SCORE}`;
+  }
   const hp = Math.max(0, Math.ceil(player.health));
   health.textContent = player.alive ? `Health ${hp}` : "Health 0";
   fill.style.width = `${(hp / MAX_HEALTH) * 100}%`;
@@ -2861,7 +3108,7 @@ function runSelfTest() {
   clearKeys();
   const mapProblems = validateArena();
   check(mapProblems.length === 0, mapProblems.join("; ") || "map");
-  check(X1 - X0 >= 40 && Z1 - Z0 >= 28, "arena did not grow");
+  check(X1 - X0 >= 60 && Z1 - Z0 >= 44, "arena did not grow");
 
   player.x = 0;
   player.z = 0;
@@ -3878,6 +4125,26 @@ function runSelfTest() {
   mode = "bot";
   roundWait = 0;
   matchOver = false;
+  mySeat = 0;
+  const seamThere = () => boxes.some((box) => box.breakable && box.minX > 5.5 && box.maxX < 6.5 && box.minZ >= 2 && box.minY > 1);
+  check(X1 - X0 >= 60 && Z1 - Z0 >= 44, "house did not grow");
+  check(seamThere(), "house seam missing");
+  loadMap("yard");
+  check(mapId === "yard" && X1 - X0 === 56 && Z1 - Z0 === 56, `yard is ${X1 - X0} by ${Z1 - Z0}`);
+  check(boxes.filter((box) => !box.breakable).length === 6, "yard shell is not six pieces");
+  check(boxes.some((box) => box.breakable && box.maxY < 3 && box.maxY > 1), "yard has no low cover");
+  loadMap("house");
+  check(X1 - X0 >= 60 && Z1 - Z0 >= 44, "house did not return");
+  check(seamThere(), "house seam missing after the yard");
+  const reloaded = validateArena();
+  check(reloaded.length === 0, reloaded.join("; ") || "house broke after reload");
+  const randomRoll = Math.random;
+  Math.random = () => 0.1;
+  check(chooseMap("bot") === "house", "a low roll was not the house");
+  Math.random = () => 0.9;
+  check(chooseMap("bot") === "yard", "a high roll was not the yard");
+  Math.random = randomRoll;
+  check(chooseMap("party", "yard") === "yard" && chooseMap("party", "nope") === "house", "party map choice changed");
 
   freezeBot = false;
   const codec = mqttCodecCheck();
@@ -3942,15 +4209,191 @@ function closeNet() {
   if (room) room.close();
 }
 
+function partySeats() {
+  if (linkMode === "web" && netRoom && netRoom.role === "host") {
+    const seats = [0];
+    for (const link of netRoom.links) {
+      if (link.opened && link.channel && link.channel.readyState === "open") seats.push(link.seat);
+    }
+    return seats;
+  }
+  return partyRoster.slice();
+}
+
+function partyCount() {
+  if (linkMode === "web" && netRoom && netRoom.role === "host") return 1 + netRoom.openCount();
+  if (linkMode === "lan") return lanReady ? 2 : 1;
+  return Math.max(1, partySize);
+}
+
+function updatePartyLobby() {
+  const line = document.getElementById("party-line");
+  const start = document.getElementById("start-party");
+  const note = document.getElementById("map-note");
+  const copy = document.getElementById("copy");
+  const host = hosting && mode === "net";
+  if (line) line.textContent = `Party ${Math.max(1, Math.min(4, partyCount()))}/4`;
+  document.querySelectorAll("#maps button").forEach((button) => {
+    button.classList.toggle("on", button.dataset.map === (partyMap === "yard" ? "yard" : "house"));
+    button.disabled = !host;
+  });
+  if (start) {
+    start.hidden = !host;
+    start.disabled = partyCount() < 2;
+  }
+  if (copy) copy.hidden = mode === "net" && !host;
+  if (note) {
+    note.textContent = host
+      ? "Pick a map, then start. Against a bot, the map is random."
+      : "The host picks the map. Against a bot, the map is random.";
+  }
+}
+
+function choosePartyMap(id) {
+  if (!hosting || mode !== "net" || playing) return;
+  partyMap = id === "yard" ? "yard" : "house";
+  updatePartyLobby();
+  if (linkMode === "web" && netRoom) netRoom.send({ cmd: "map", map: partyMap });
+  else if (linkMode === "lan") queueEvent({ type: "map", map: partyMap });
+}
+
+function markPartyPresent() {
+  const live = new Set(hosting && linkMode === "web" ? partySeats() : partyRoster);
+  live.delete(mySeat);
+  for (const actor of [bot, mateA, mateB]) {
+    const here = live.has(actor.seat);
+    actor.present = here;
+    if (here) {
+      actor.alive = true;
+      actor.health = MAX_HEALTH;
+    } else if (mode === "net") {
+      actor.alive = false;
+    }
+  }
+}
+
+function hideSeat(seat) {
+  const actor = actorForSeat(seat);
+  if (actor && actor !== player) {
+    actor.present = false;
+    actor.alive = false;
+    actor.health = 0;
+    if (actor.mesh) actor.mesh.visible = false;
+  }
+  partyRoster = partyRoster.filter((item) => item !== seat);
+  partySize = Math.max(1, partyRoster.length);
+}
+
+function broadcastRoster() {
+  const seats = partySeats();
+  partyRoster = seats;
+  partySize = seats.length;
+  if (linkMode === "web" && netRoom && netRoom.role === "host") {
+    netRoom.send({ cmd: "roster", count: partySize, map: partyMap, seats });
+  }
+  updatePartyLobby();
+}
+
+function followStart(mapName) {
+  if (playing) return;
+  partyMap = chooseMap("party", mapName);
+  loadMap(partyMap);
+  markPartyPresent();
+  startMatch();
+}
+
+function beginPartyMatch() {
+  if (!hosting || playing) return;
+  partyMap = chooseMap("party", partyMap);
+  loadMap(partyMap);
+  markPartyPresent();
+  if (linkMode === "web" && netRoom) netRoom.send({ cmd: "start", map: partyMap });
+  else if (linkMode === "lan") queueEvent({ type: "start", map: partyMap });
+  startMatch();
+}
+
+function applyLobbyCommand(message) {
+  if (!message) return;
+  if (message.cmd === "welcome") {
+    welcomed = true;
+    mySeat = message.seat === 1 || message.seat === 2 || message.seat === 3 ? message.seat : 1;
+    partyMap = message.map === "yard" ? "yard" : "house";
+    partyRoster = [0, mySeat];
+    partySize = Math.max(partySize, 2);
+    if (mode === "net") placeSeats();
+    updatePartyLobby();
+    return;
+  }
+  if (message.cmd === "map") {
+    if (playing || hosting) return;
+    partyMap = message.map === "yard" ? "yard" : "house";
+    updatePartyLobby();
+    return;
+  }
+  if (message.cmd === "roster") {
+    partySize = message.count || 1;
+    if (message.map === "yard" || message.map === "house") partyMap = message.map;
+    if (Array.isArray(message.seats)) {
+      partyRoster = message.seats.slice();
+      if (mode === "net" && !hosting) {
+        const live = new Set(partyRoster);
+        for (const actor of [bot, mateA, mateB]) {
+          actor.present = live.has(actor.seat);
+          if (!actor.present) {
+            actor.alive = false;
+            if (actor.mesh) actor.mesh.visible = false;
+          }
+        }
+      }
+    }
+    updatePartyLobby();
+    return;
+  }
+  if (message.cmd === "start") {
+    followStart(message.map);
+    return;
+  }
+  if (message.cmd === "left") {
+    hideSeat(message.seat);
+    updatePartyLobby();
+  }
+}
+
+function handleNetPacket(message, fromId) {
+  if (!message || typeof message !== "object") return;
+  if (message.cmd) {
+    applyLobbyCommand(message);
+    return;
+  }
+  if (typeof message.seat === "number" && message.seat === mySeat) return;
+  if (linkMode === "web" && netRoom && netRoom.role === "host" && fromId) netRoom.send(message, fromId);
+  for (const event of message.events || []) {
+    if (event && (event.type === "map" || event.type === "start" || event.type === "left")) {
+      applyLobbyCommand({ cmd: event.type, map: event.map, seat: event.seat });
+    } else applyEvent(event);
+  }
+  if (message.state) applyRemote(message.state, typeof message.seat === "number" ? message.seat : undefined);
+}
+
 function attachRoom(room) {
   netRoom = room;
-  room.onmessage = (message) => {
+  room.onmessage = (message, fromId) => {
     if (mode !== "net") return;
-    for (const event of message.events || []) applyEvent(event);
-    if (message.state) applyRemote(message.state);
+    handleNetPacket(message, fromId);
   };
-  room.onopen = () => {
-    if (mode === "net" && !playing) startMatch();
+  room.onopen = (link) => {
+    if (mode !== "net" || !netRoom || room.role !== "host" || !link) return;
+    netRoom.sendTo(link.id, { cmd: "welcome", seat: link.seat, map: partyMap });
+    broadcastRoster();
+  };
+  room.onleave = (seat, id) => {
+    hideSeat(seat);
+    if (netRoom && netRoom.role === "host") {
+      netRoom.send({ cmd: "left", seat }, id);
+      broadcastRoster();
+    }
+    if (playing && netRoom && netRoom.openCount() === 0) friendLeft = true;
+    updatePartyLobby();
   };
   room.onclose = () => {
     if (mode === "net" && playing) friendLeft = true;
@@ -3974,7 +4417,7 @@ async function syncNet() {
   if (linkMode === "web") {
     if (!netRoom || !netRoom.linked) return;
     const events = takeEvents();
-    if (!netRoom.send({ state: snapshot(), events })) restoreEvents(events);
+    if (!netRoom.send({ seat: mySeat, state: snapshot(), events })) restoreEvents(events);
     return;
   }
   const events = takeEvents();
@@ -3987,11 +4430,23 @@ async function syncNet() {
     });
     const wait = document.getElementById("wait");
     if (data.waiting) {
+      lanReady = false;
+      restoreEvents(events);
+      updatePartyLobby();
       if (wait && !playing) wait.textContent = "Waiting for your friend on the same Wi-Fi.";
       return;
     }
-    if (!playing) startMatch();
-    for (const event of data.events || []) applyEvent(event);
+    lanReady = true;
+    if (hosting) {
+      partyRoster = [0, 1];
+      partySize = 2;
+    }
+    updatePartyLobby();
+    for (const event of data.events || []) {
+      if (event && (event.type === "map" || event.type === "start" || event.type === "left")) {
+        applyLobbyCommand({ cmd: event.type, map: event.map, seat: event.seat });
+      } else applyEvent(event);
+    }
     if (data.opponent) applyRemote(data.opponent);
   } catch (error) {
     restoreEvents(events);
@@ -4308,13 +4763,20 @@ function leaveToMenu() {
   paused = false;
   pauseOpen = false;
   mode = "bot";
+  hosting = false;
+  welcomed = false;
+  lanReady = false;
+  partyMap = "house";
+  partySize = 1;
+  partyRoster = [0];
   closeNet();
   playerId = "";
   roomCode = "";
   netEvents.length = 0;
   adsHeld = false;
   mouseDown = false;
-  setSeat(0);
+  mySeat = 0;
+  loadMap("house");
   resetMatch();
   showPanel("home");
 }
@@ -4335,10 +4797,19 @@ function startMatch() {
 
 function leaveLobby() {
   mode = "bot";
+  hosting = false;
+  welcomed = false;
+  lanReady = false;
+  partyMap = "house";
+  partySize = 1;
+  partyRoster = [0];
   closeNet();
   playerId = "";
   roomCode = "";
   netEvents.length = 0;
+  mySeat = 0;
+  if (mapId !== "house") loadMap("house");
+  else placeSeats();
   showPanel("home");
 }
 
@@ -4369,18 +4840,35 @@ function bindMenu() {
   document.getElementById("play-bot").addEventListener("click", () => {
     ensureAudio();
     closeNet();
+    hosting = false;
+    welcomed = false;
+    lanReady = false;
     mode = "bot";
     playerId = "";
     roomCode = "";
-    setSeat(0);
+    mySeat = 0;
+    loadMap(chooseMap("bot"));
     startMatch();
     document.body.requestPointerLock();
   });
+  document.querySelectorAll("#maps button").forEach((button) => {
+    button.addEventListener("click", () => choosePartyMap(button.dataset.map));
+  });
+  const startParty = document.getElementById("start-party");
+  if (startParty) startParty.addEventListener("click", beginPartyMatch);
   document.getElementById("resume").addEventListener("click", resumeMatch);
   document.getElementById("leave-menu").addEventListener("click", leaveToMenu);
   document.getElementById("host-room").addEventListener("click", async () => {
     closeNet();
+    hosting = true;
+    welcomed = false;
+    lanReady = false;
+    partyMap = "house";
+    partySize = 1;
+    partyRoster = [0];
+    mySeat = 0;
     showPanel("lobby");
+    updatePartyLobby();
     document.getElementById("code").textContent = "...";
     document.getElementById("link").textContent = "";
     document.getElementById("copy").textContent = "Copy invite link";
@@ -4395,9 +4883,11 @@ function bindMenu() {
         playerId = room.peerId;
         mode = "net";
         linkMode = "web";
-        setSeat(0);
+        mySeat = 0;
+        placeSeats();
         document.getElementById("code").textContent = code;
         document.getElementById("link").textContent = inviteLink(code);
+        updatePartyLobby();
         return;
       } catch (error) {
         if (error.code === "closed" || netRoom !== room) return;
@@ -4411,10 +4901,12 @@ function bindMenu() {
       playerId = data.id;
       mode = "net";
       linkMode = "lan";
-      setSeat(0);
+      mySeat = 0;
+      placeSeats();
       document.getElementById("code").textContent = data.code;
       document.getElementById("link").textContent = data.link;
       document.getElementById("wait").textContent = "This code only works for a friend on the same Wi-Fi.";
+      updatePartyLobby();
     } catch (error) {
       document.getElementById("wait").textContent = "Could not open a room. Check your connection and try again.";
     }
@@ -4471,16 +4963,26 @@ function bindMenu() {
       playerId = room.peerId;
       mode = "net";
       linkMode = "web";
-      setSeat(1);
+      hosting = false;
+      welcomed = false;
+      partyMap = "house";
+      partyRoster = [0];
+      mySeat = 1;
+      placeSeats();
       showPanel("lobby");
+      updatePartyLobby();
       document.getElementById("code").textContent = code;
       document.getElementById("link").textContent = "";
       document.getElementById("wait").textContent = "Looking for that room...";
       try {
         await room.join(code);
         if (netRoom !== room) return;
-        document.getElementById("wait").textContent = "Joined. Starting the 1v1...";
-        if (!playing) startMatch();
+        if (!welcomed) {
+          mySeat = room.seat || 1;
+          placeSeats();
+        }
+        updatePartyLobby();
+        document.getElementById("wait").textContent = "In the party. Waiting for the host to pick a map and start.";
         return;
       } catch (error) {
         if (error.code === "closed" || netRoom !== room) return;
@@ -4508,11 +5010,14 @@ function bindMenu() {
       playerId = data.id;
       mode = "net";
       linkMode = "lan";
-      setSeat(1);
+      hosting = false;
+      mySeat = 1;
+      placeSeats();
       showPanel("lobby");
+      updatePartyLobby();
       document.getElementById("code").textContent = data.code;
       document.getElementById("link").textContent = "";
-      document.getElementById("wait").textContent = "Joined. Starting the 1v1...";
+      document.getElementById("wait").textContent = "In the party. Waiting for the host to pick a map and start.";
     } catch (error) {
       mode = "bot";
       linkMode = "";
@@ -4583,8 +5088,7 @@ function boot() {
   loadSettings();
   refreshLockHint();
   buildLights();
-  buildOuterCuboid();
-  buildInnerWalls();
+  loadMap("house");
   buildBotMesh();
   player.weapon = weaponById(primaryId);
   showGun();

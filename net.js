@@ -247,19 +247,17 @@ export class InternetRoom {
     this.role = "";
     this.otherId = "";
     this.ws = null;
-    this.pc = null;
-    this.channel = null;
+    this.links = [];
     this.buffer = new Uint8Array(0);
-    this.pendingIce = [];
     this.closed = false;
     this.linked = false;
     this.sawHost = false;
-    this.remoteSet = false;
     this.answering = false;
-    this.offering = false;
+    this.seat = 0;
     this.onmessage = () => {};
     this.onopen = () => {};
     this.onclose = () => {};
+    this.onleave = () => {};
     this.onstatus = () => {};
   }
 
@@ -275,7 +273,7 @@ export class InternetRoom {
     if (this.closed) throw new RoomError("closed", "Room closed.");
     this.publishBeacon();
     this.hostTimer = setInterval(() => this.publishBeacon(), 15000);
-    this.onstatus("Waiting for your friend. Send the code or the link. Different Wi-Fi works.");
+    this.onstatus("Waiting for your party. Up to 4 players. Different Wi-Fi works.");
     return this.code;
   }
 
@@ -294,11 +292,28 @@ export class InternetRoom {
     await this.waitFor("link", 15000, new RoomError("timeout", CONNECT_FAIL));
   }
 
-  send(payload) {
-    if (!this.channel || this.channel.readyState !== "open") return false;
-    if (this.channel.bufferedAmount > 250000) return false;
-    this.channel.send(JSON.stringify(payload));
+  send(payload, exceptId) {
+    const text = JSON.stringify(payload);
+    let sent = false;
+    for (const link of this.links) {
+      if (exceptId && link.id === exceptId) continue;
+      if (!link.channel || link.channel.readyState !== "open") continue;
+      if (link.channel.bufferedAmount > 250000) continue;
+      link.channel.send(text);
+      sent = true;
+    }
+    return sent;
+  }
+
+  sendTo(id, payload) {
+    const link = this.links.find((item) => item.id === id);
+    if (!link || !link.channel || link.channel.readyState !== "open") return false;
+    link.channel.send(JSON.stringify(payload));
     return true;
+  }
+
+  openCount() {
+    return this.links.filter((link) => link.channel && link.channel.readyState === "open").length;
   }
 
   close() {
@@ -313,12 +328,7 @@ export class InternetRoom {
     if (this.role === "host" && this.ws && this.ws.readyState === WebSocket.OPEN) {
       try { this.ws.send(encodePublish(this.topic(), "", true)); } catch (error) { /* already leaving */ }
     }
-    if (this.channel) {
-      try { this.channel.close(); } catch (error) { /* already closed */ }
-    }
-    if (this.pc) {
-      try { this.pc.close(); } catch (error) { /* already closed */ }
-    }
+    for (const link of this.links) this.dropLink(link);
     this.dropSocket();
     if (wasLinked) this.onclose();
   }
@@ -456,120 +466,180 @@ export class InternetRoom {
   }
 
   onHello(message) {
-    if ((this.linked || this.pc) && message.from !== this.otherId) {
-      this.publish({ kind: "full", to: message.from });
-      return;
+    let link = this.links.find((item) => item.id === message.from);
+    if (!link) {
+      if (this.links.length >= 3) {
+        this.publish({ kind: "full", to: message.from });
+        return;
+      }
+      link = {
+        id: message.from,
+        seat: this.links.reduce((max, item) => Math.max(max, item.seat), 0) + 1,
+        pc: null,
+        channel: null,
+        pendingIce: [],
+        remoteSet: false,
+        offering: false,
+      };
+      this.links.push(link);
     }
-    this.otherId = message.from;
-    if (!this.pc) this.startOffer();
+    if (link.channel && link.channel.readyState === "open") return;
+    if (!link.pc) this.startOffer(link);
   }
 
-  async startOffer() {
-    if (this.offering || this.closed) return;
-    this.offering = true;
-    this.onstatus("Friend joined. Connecting...");
+  async startOffer(link) {
+    if (link.offering || this.closed) return;
+    link.offering = true;
+    this.onstatus("Someone joined the party. Connecting...");
     try {
-      this.makePc();
-      this.bindChannel(this.pc.createDataChannel("game"));
-      const offer = await this.pc.createOffer();
+      this.makePc(link);
+      this.bindChannel(link, link.pc.createDataChannel("game"));
+      const offer = await link.pc.createOffer();
       if (this.closed) return;
-      await this.pc.setLocalDescription(offer);
-      await waitIce(this.pc, 1800);
+      await link.pc.setLocalDescription(offer);
+      await waitIce(link.pc, 1800);
       if (this.closed) return;
-      this.publish({ kind: "offer", to: this.otherId, sdp: this.pc.localDescription.sdp });
+      this.publish({ kind: "offer", to: link.id, sdp: link.pc.localDescription.sdp, seat: link.seat });
     } catch (error) {
-      this.fail(new RoomError("timeout", CONNECT_FAIL));
+      this.dropLink(link);
     }
   }
 
   async onOffer(message) {
     if (this.answering || this.linked || this.closed) return;
     this.answering = true;
-    this.otherId = message.from;
+    this.seat = message.seat || 1;
+    const link = this.ensureGuestLink(message.from);
     try {
-      if (!this.pc) this.makePc();
-      await this.pc.setRemoteDescription({ type: "offer", sdp: message.sdp });
-      this.remoteSet = true;
-      await this.flushIce();
-      const answer = await this.pc.createAnswer();
+      if (!link.pc) this.makePc(link);
+      await link.pc.setRemoteDescription({ type: "offer", sdp: message.sdp });
+      link.remoteSet = true;
+      await this.flushIce(link);
+      const answer = await link.pc.createAnswer();
       if (this.closed) return;
-      await this.pc.setLocalDescription(answer);
-      await waitIce(this.pc, 1800);
+      await link.pc.setLocalDescription(answer);
+      await waitIce(link.pc, 1800);
       if (this.closed) return;
-      this.publish({ kind: "answer", to: this.otherId, sdp: this.pc.localDescription.sdp });
+      this.publish({ kind: "answer", to: link.id, sdp: link.pc.localDescription.sdp });
     } catch (error) {
       this.fail(new RoomError("timeout", CONNECT_FAIL));
     }
   }
 
   async onAnswer(message) {
-    if (!this.pc || this.remoteSet || this.closed) return;
+    const link = this.links.find((item) => item.id === message.from);
+    if (!link || !link.pc || link.remoteSet || this.closed) return;
     try {
-      await this.pc.setRemoteDescription({ type: "answer", sdp: message.sdp });
-      this.remoteSet = true;
-      await this.flushIce();
+      await link.pc.setRemoteDescription({ type: "answer", sdp: message.sdp });
+      link.remoteSet = true;
+      await this.flushIce(link);
     } catch (error) {
-      this.fail(new RoomError("timeout", CONNECT_FAIL));
+      this.dropLink(link);
     }
   }
 
   async onIce(message) {
     if (!message.candidate) return;
-    if (!this.pc || !this.remoteSet) {
-      this.pendingIce.push(message.candidate);
+    const link = this.role === "guest" ? this.links[0] : this.links.find((item) => item.id === message.from);
+    if (!link) return;
+    if (!link.pc || !link.remoteSet) {
+      link.pendingIce.push(message.candidate);
       return;
     }
     try {
-      await this.pc.addIceCandidate(message.candidate);
+      await link.pc.addIceCandidate(message.candidate);
     } catch (error) { /* candidate already in the description, or the peer is gone */ }
   }
 
-  async flushIce() {
-    const queued = this.pendingIce.splice(0, this.pendingIce.length);
+  async flushIce(link) {
+    const queued = link.pendingIce.splice(0, link.pendingIce.length);
     for (const candidate of queued) {
       try {
-        await this.pc.addIceCandidate(candidate);
+        await link.pc.addIceCandidate(candidate);
       } catch (error) { /* ignore duplicates */ }
     }
   }
 
-  makePc() {
-    this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    this.pendingIce = [];
-    this.remoteSet = false;
-    this.pc.onicecandidate = (event) => {
-      if (!event.candidate || !this.otherId || this.closed) return;
-      this.publish({ kind: "ice", to: this.otherId, candidate: event.candidate.toJSON() });
+  ensureGuestLink(hostId) {
+    if (!this.links[0]) {
+      this.links[0] = {
+        id: hostId,
+        seat: 0,
+        pc: null,
+        channel: null,
+        pendingIce: [],
+        remoteSet: false,
+        offering: false,
+      };
+    }
+    this.links[0].id = hostId;
+    return this.links[0];
+  }
+
+  makePc(link) {
+    link.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    link.pendingIce = [];
+    link.remoteSet = false;
+    link.pc.onicecandidate = (event) => {
+      if (!event.candidate || this.closed) return;
+      this.publish({ kind: "ice", to: link.id, candidate: event.candidate.toJSON() });
     };
-    this.pc.onconnectionstatechange = () => {
-      if (this.pc && this.pc.connectionState === "failed" && !this.closed) {
-        this.fail(new RoomError("timeout", CONNECT_FAIL));
-      }
+    link.pc.onconnectionstatechange = () => {
+      if (!link.pc || link.pc.connectionState !== "failed" || this.closed) return;
+      if (this.role === "guest") this.fail(new RoomError("timeout", CONNECT_FAIL));
+      else this.dropLink(link);
     };
-    this.pc.ondatachannel = (event) => {
-      if (this.role === "guest") this.bindChannel(event.channel);
+    link.pc.ondatachannel = (event) => {
+      if (this.role === "guest") this.bindChannel(link, event.channel);
     };
   }
 
-  bindChannel(channel) {
-    if (this.channel && this.channel !== channel && this.channel.readyState === "open") return;
-    this.channel = channel;
+  bindChannel(link, channel) {
+    if (link.channel && link.channel !== channel && link.channel.readyState === "open") return;
+    link.channel = channel;
     channel.onopen = () => {
+      link.opened = true;
       this.linked = true;
       clearInterval(this.helloTimer);
       this.resolveWaiter("link");
-      this.onopen();
+      this.onopen(link);
     };
     channel.onmessage = (event) => {
       try {
-        this.onmessage(JSON.parse(event.data));
+        this.onmessage(JSON.parse(event.data), link.id);
       } catch (error) { /* ignore a bad packet */ }
     };
     channel.onclose = () => {
-      const wasLinked = this.linked;
-      this.linked = false;
-      if (wasLinked && !this.closed) this.onclose();
+      const wasOpen = link.channel === channel;
+      link.channel = null;
+      if (!wasOpen || this.closed) return;
+      if (this.role === "guest") {
+        const wasLinked = this.linked;
+        this.linked = false;
+        if (wasLinked) this.onclose();
+        return;
+      }
+      this.onleave(link.seat, link.id);
+      if (!this.openCount()) this.linked = false;
     };
+  }
+
+  dropLink(link) {
+    if (!link) return;
+    const opened = link.opened;
+    if (link.channel) {
+      try { link.channel.close(); } catch (error) { /* already closed */ }
+    }
+    if (link.pc) {
+      try { link.pc.close(); } catch (error) { /* already closed */ }
+    }
+    link.pc = null;
+    link.channel = null;
+    link.offering = false;
+    if (!this.closed && !opened) {
+      const index = this.links.indexOf(link);
+      if (index >= 0) this.links.splice(index, 1);
+    }
   }
 
   publishBeacon() {
@@ -686,7 +756,35 @@ export async function netSelfTest() {
       return "FAIL\nguest did not get the host state";
     }
     if (!hostGot || hostGot.state.x !== 9) return "FAIL\nhost did not get the guest state";
-    return `PASS\nlinked in ${Date.now() - started}ms via ${host.broker}`;
+    if (guest.seat !== 1) return `FAIL\nfirst guest seat is ${guest.seat}`;
+    const more = [new InternetRoom(), new InternetRoom()];
+    const seen = [false, false];
+    more.forEach((member, index) => {
+      member.onmessage = (message) => {
+        if (message && message.state && message.state.x === 7) seen[index] = true;
+      };
+    });
+    await Promise.all(more.map((member) => member.join(code)));
+    if (more[0].seat !== 2 || more[1].seat !== 3) return `FAIL\nseats ${more.map((member) => member.seat).join(",")}`;
+    if (!host.send({ state: { x: 7, z: 1, health: 200, alive: true, kills: 0, weapon: 0 }, events: [] })) {
+      return "FAIL\nhost could not reach the party";
+    }
+    const partyDeadline = Date.now() + 5000;
+    while (seen.some((got) => !got) && Date.now() < partyDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    if (seen.some((got) => !got)) return "FAIL\na party member missed the host";
+    const extra = new InternetRoom();
+    let rejected = "";
+    try {
+      await extra.join(code);
+    } catch (error) {
+      rejected = error.code || "";
+    }
+    if (rejected !== "full") return `FAIL\nfifth player got ${rejected || "in"}`;
+    more.forEach((member) => member.close());
+    extra.close();
+    return `PASS\nparty of 4 in ${Date.now() - started}ms via ${host.broker}`;
   } catch (error) {
     return `FAIL\n${error.message || error}\nhost: ${hostStatus}\nguest: ${guestStatus}`;
   } finally {
