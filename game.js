@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { InternetRoom, inviteLink, mqttCodecCheck, netSelfTest, readRoomCode, webAvailable } from "./net.js";
 
 // yaw 0, pitch 0 looks down -z. Negative pitch looks down. Recoil adds to pitch.
 const UP = new THREE.Vector3(0, 1, 0);
@@ -179,6 +180,9 @@ let playing = false;
 let mode = "bot";
 let roomCode = "";
 let playerId = "";
+let linkMode = "";
+let netRoom = null;
+let friendLeft = false;
 let ads = 0;
 let adsHeld = false;
 let repair = 0;
@@ -2770,7 +2774,8 @@ function paintHud() {
     hint.textContent = "Pick primary: 1 SMG, 2 AR, 3 Shotgun, 4 Sniper";
   } else hint.textContent = weapon.hint;
   let message = banner;
-  if (!matchOver && roundWait > 0) message = `Next round in ${Math.max(1, Math.ceil(roundWait))}`;
+  if (friendLeft) message = "Friend left";
+  else if (!matchOver && roundWait > 0) message = `Next round in ${Math.max(1, Math.ceil(roundWait))}`;
   else if (!matchOver && roundWait <= 0 && player.alive && player.spawnLock > 0) message = "Spawn protection";
   bannerEl.textContent = message;
   flash.style.opacity = String(damageFlash > 0 ? 1 : 0);
@@ -3875,6 +3880,8 @@ function runSelfTest() {
   matchOver = false;
 
   freezeBot = false;
+  const codec = mqttCodecCheck();
+  check(codec.ok, codec.reason || "match codec");
   if (failures.length) return `FAIL\n${failures.join("\n")}`;
   return "PASS";
 }
@@ -3927,9 +3934,50 @@ async function api(path, body) {
 let syncing = false;
 let lastSync = 0;
 
+function closeNet() {
+  friendLeft = false;
+  linkMode = "";
+  const room = netRoom;
+  netRoom = null;
+  if (room) room.close();
+}
+
+function attachRoom(room) {
+  netRoom = room;
+  room.onmessage = (message) => {
+    if (mode !== "net") return;
+    for (const event of message.events || []) applyEvent(event);
+    if (message.state) applyRemote(message.state);
+  };
+  room.onopen = () => {
+    if (mode === "net" && !playing) startMatch();
+  };
+  room.onclose = () => {
+    if (mode === "net" && playing) friendLeft = true;
+  };
+  room.onstatus = (text) => {
+    const wait = document.getElementById("wait");
+    if (wait && !playing) wait.textContent = text;
+  };
+}
+
+function takeEvents() {
+  return netEvents.splice(0, netEvents.length);
+}
+
+function restoreEvents(events) {
+  if (events.length) netEvents.unshift(...events);
+}
+
 async function syncNet() {
   if (mode !== "net" || !playerId || !roomCode) return;
-  const events = netEvents.splice(0, netEvents.length);
+  if (linkMode === "web") {
+    if (!netRoom || !netRoom.linked) return;
+    const events = takeEvents();
+    if (!netRoom.send({ state: snapshot(), events })) restoreEvents(events);
+    return;
+  }
+  const events = takeEvents();
   try {
     const data = await api("/api/sync", {
       code: roomCode,
@@ -3939,17 +3987,17 @@ async function syncNet() {
     });
     const wait = document.getElementById("wait");
     if (data.waiting) {
-      if (wait && !playing) wait.textContent = "Waiting for your friend on the same Wi-Fi. Windows may ask to allow Python.";
+      if (wait && !playing) wait.textContent = "Waiting for your friend on the same Wi-Fi.";
       return;
     }
     if (!playing) startMatch();
     for (const event of data.events || []) applyEvent(event);
     if (data.opponent) applyRemote(data.opponent);
   } catch (error) {
-    netEvents.unshift(...events);
+    restoreEvents(events);
     const wait = document.getElementById("wait");
     const joinError = document.getElementById("join-error");
-    const message = "Start the game with start.bat so friends can join.";
+    const message = "The room dropped. Same-Wi-Fi matches need the game running on the host computer.";
     if (wait && !playing) wait.textContent = message;
     if (joinError && !playing && !roomCode) joinError.textContent = message;
   }
@@ -4260,6 +4308,7 @@ function leaveToMenu() {
   paused = false;
   pauseOpen = false;
   mode = "bot";
+  closeNet();
   playerId = "";
   roomCode = "";
   netEvents.length = 0;
@@ -4274,6 +4323,7 @@ function startMatch() {
   playing = true;
   paused = false;
   pauseOpen = false;
+  friendLeft = false;
   document.getElementById("menu").style.display = "none";
   const pause = document.getElementById("pause");
   if (pause) pause.hidden = true;
@@ -4285,6 +4335,7 @@ function startMatch() {
 
 function leaveLobby() {
   mode = "bot";
+  closeNet();
   playerId = "";
   roomCode = "";
   netEvents.length = 0;
@@ -4293,7 +4344,7 @@ function leaveLobby() {
 
 function bindMenu() {
   const params = new URLSearchParams(location.search);
-  const preset = (params.get("room") || "").toUpperCase();
+  const preset = readRoomCode(params.get("room") || "");
   if (preset) {
     showPanel("join");
     document.getElementById("code-input").value = preset;
@@ -4317,6 +4368,7 @@ function bindMenu() {
   });
   document.getElementById("play-bot").addEventListener("click", () => {
     ensureAudio();
+    closeNet();
     mode = "bot";
     playerId = "";
     roomCode = "";
@@ -4327,20 +4379,44 @@ function bindMenu() {
   document.getElementById("resume").addEventListener("click", resumeMatch);
   document.getElementById("leave-menu").addEventListener("click", leaveToMenu);
   document.getElementById("host-room").addEventListener("click", async () => {
+    closeNet();
     showPanel("lobby");
     document.getElementById("code").textContent = "...";
     document.getElementById("link").textContent = "";
-    document.getElementById("wait").textContent = "Waiting for your friend on the same Wi-Fi. Windows may ask to allow Python.";
+    document.getElementById("copy").textContent = "Copy invite link";
+    document.getElementById("wait").textContent = "Opening a room...";
+    if (webAvailable()) {
+      const room = new InternetRoom();
+      attachRoom(room);
+      try {
+        const code = await room.host();
+        if (netRoom !== room) return;
+        roomCode = code;
+        playerId = room.peerId;
+        mode = "net";
+        linkMode = "web";
+        setSeat(0);
+        document.getElementById("code").textContent = code;
+        document.getElementById("link").textContent = inviteLink(code);
+        return;
+      } catch (error) {
+        if (error.code === "closed" || netRoom !== room) return;
+        room.close();
+        if (netRoom === room) netRoom = null;
+      }
+    }
     try {
       const data = await api("/api/host", {});
       roomCode = data.code;
       playerId = data.id;
       mode = "net";
+      linkMode = "lan";
       setSeat(0);
       document.getElementById("code").textContent = data.code;
       document.getElementById("link").textContent = data.link;
+      document.getElementById("wait").textContent = "This code only works for a friend on the same Wi-Fi.";
     } catch (error) {
-      document.getElementById("wait").textContent = "Start the game with start.bat so friends can join.";
+      document.getElementById("wait").textContent = "Could not open a room. Check your connection and try again.";
     }
   });
   document.getElementById("show-join").addEventListener("click", () => {
@@ -4379,25 +4455,72 @@ function bindMenu() {
     }
   });
   document.getElementById("join-btn").addEventListener("click", async () => {
-    const code = document.getElementById("code-input").value.trim().toUpperCase();
+    const code = readRoomCode(document.getElementById("code-input").value);
     const errorEl = document.getElementById("join-error");
     errorEl.textContent = "";
-    if (!code) {
+    if (code.length < 4) {
       errorEl.textContent = "Enter the room code.";
       return;
+    }
+    closeNet();
+    let webError = null;
+    if (webAvailable()) {
+      const room = new InternetRoom();
+      attachRoom(room);
+      roomCode = code;
+      playerId = room.peerId;
+      mode = "net";
+      linkMode = "web";
+      setSeat(1);
+      showPanel("lobby");
+      document.getElementById("code").textContent = code;
+      document.getElementById("link").textContent = "";
+      document.getElementById("wait").textContent = "Looking for that room...";
+      try {
+        await room.join(code);
+        if (netRoom !== room) return;
+        document.getElementById("wait").textContent = "Joined. Starting the 1v1...";
+        if (!playing) startMatch();
+        return;
+      } catch (error) {
+        if (error.code === "closed" || netRoom !== room) return;
+        room.close();
+        if (netRoom === room) netRoom = null;
+        if (error.code === "full" || error.code === "timeout") {
+          mode = "bot";
+          linkMode = "";
+          roomCode = "";
+          playerId = "";
+          errorEl.textContent = error.message;
+          showPanel("join");
+          return;
+        }
+        webError = error;
+        mode = "bot";
+        linkMode = "";
+        roomCode = "";
+        playerId = "";
+      }
     }
     try {
       const data = await api("/api/join", { code });
       roomCode = data.code;
       playerId = data.id;
       mode = "net";
+      linkMode = "lan";
       setSeat(1);
       showPanel("lobby");
       document.getElementById("code").textContent = data.code;
       document.getElementById("link").textContent = "";
       document.getElementById("wait").textContent = "Joined. Starting the 1v1...";
     } catch (error) {
-      errorEl.textContent = error.message || "Could not join.";
+      mode = "bot";
+      linkMode = "";
+      roomCode = "";
+      playerId = "";
+      if (webError && webError.code === "missing") errorEl.textContent = "No room with that code.";
+      else if (webError) errorEl.textContent = webError.message;
+      else errorEl.textContent = error.message || "Could not join.";
       showPanel("join");
     }
   });
@@ -4447,7 +4570,16 @@ function resize() {
 }
 
 function boot() {
-  audioMuted = new URLSearchParams(location.search).has("test");
+  const bootParams = new URLSearchParams(location.search);
+  if (bootParams.has("nettest")) {
+    netSelfTest().then((report) => {
+      const result = document.getElementById("result");
+      if (result) result.textContent = report;
+      document.title = report.startsWith("PASS") ? "PASS" : "FAIL";
+    });
+    return;
+  }
+  audioMuted = bootParams.has("test");
   loadSettings();
   refreshLockHint();
   buildLights();

@@ -251,7 +251,7 @@
       <div>
         <p class="eyebrow">Browser 1v1</p>
         <h1>A quick few ones.</h1>
-        <p class="lede">Pick a gun, shoot the house open, and race to five. The bot is ready. A friend on the same Wi-Fi can join with a code.</p>
+        <p class="lede">Pick a gun, shoot the house open, and race to five. The bot is ready. A friend on any Wi-Fi can join with a code.</p>
       </div>
       <div class="card" id="play">
     <p class="card-kicker">Play</p>
@@ -288,11 +288,11 @@
       <div id="code"></div>
       <div id="link"></div>
       <button id="copy" type="button">Copy invite link</button>
-      <div id="wait">Waiting for your friend on the same Wi-Fi. Windows may ask to allow Python.</div>
+      <div id="wait">Waiting for your friend. Send the code or the link. Different Wi-Fi works.</div>
       <button id="lobby-back" class="ghost" type="button">Back</button>
     </div>
     <div id="join-box" hidden>
-      <input id="code-input" maxlength="4" placeholder="Room code" autocomplete="off">
+      <input id="code-input" maxlength="200" placeholder="Room code" autocomplete="off">
       <button id="join-btn" type="button">Join</button>
       <div id="join-error"></div>
       <button id="join-back" class="ghost" type="button">Back</button>
@@ -344,6 +344,6 @@ document.querySelectorAll("[data-jump]").forEach((link) => {
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js" } }
 </script>
-<script type="module" src="./game.js"></script>
+<script type="module" src="./game.js?v=net1"></script>
 </body>
 </html>

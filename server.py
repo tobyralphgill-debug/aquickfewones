@@ -1,4 +1,4 @@
-"""aQuickFewOnes.com — the arena page plus a two-player room list."""
+"""aQuickFewOnes.com — the arena page, plus same-Wi-Fi rooms if the public match path is down."""
 
 import json
 import os
